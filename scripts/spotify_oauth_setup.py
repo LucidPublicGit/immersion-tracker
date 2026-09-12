@@ -14,7 +14,7 @@ Prerequisites:
 
 Run ON YOUR PC (needs a browser):
 
-  cd C:\\DevEnv\\immersion-tracker
+  cd path/to/immersion-tracker
   .\\.venv\\Scripts\\activate
   pip install -r requirements.txt
   python scripts/spotify_oauth_setup.py

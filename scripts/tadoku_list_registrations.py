@@ -4,7 +4,7 @@ List your ongoing Tadoku contest registrations (name + registration UUID).
 
 Uses TADOKU_COOKIE from the environment or .env in the project root.
 
-  cd C:\\DevEnv\\immersion-tracker
+  cd path/to/immersion-tracker
   .\\.venv\\Scripts\\python scripts\\tadoku_list_registrations.py
 """
 from __future__ import annotations

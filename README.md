@@ -30,24 +30,55 @@ Self-hosted Japanese immersion logger. It records books, visual novels, games, a
 
 ---
 
+## 60-second start (Docker)
+
+**Need:** [Docker Desktop](https://docs.docker.com/desktop/) (or Engine + Compose), running.
+
+```powershell
+git clone https://github.com/LucidPublicGit/immersion-tracker.git
+cd immersion-tracker
+.\setup.ps1
+```
+
+```bash
+git clone https://github.com/LucidPublicGit/immersion-tracker.git
+cd immersion-tracker
+chmod +x setup.sh && ./setup.sh
+```
+
+That creates `config/settings.yaml` + `.env`, generates a `WEBHOOK_SECRET`, starts **only** the tracker (not Tautulli), waits for health, and opens the queue UI.
+
+| After setup | URL / file |
+|-------------|------------|
+| App | http://127.0.0.1:8000/ |
+| Queue | http://127.0.0.1:8000/queue |
+| Extension cheat-sheet (URL + secret) | `data/extension-connect.txt` |
+
+**YouTube (optional):** load `extension/` in Firefox (`about:debugging` → temporary add-on) or Chrome (Load unpacked). Paste values from `data/extension-connect.txt` → **Test server**.
+
+**Sheets / Plex / Steam / …:** all optional. Local SQLite + manual logs work with zero cloud setup. Step-by-step: **[SETUP.md](SETUP.md)**.
+
+---
+
 ## Table of contents
 
-1. [How it works](#how-it-works)
-2. [Prerequisites](#prerequisites)
-3. [Setup with Docker (recommended)](#setup-with-docker-recommended)
-4. [Setup without Docker](#setup-without-docker)
-5. [Important URLs](#important-urls)
-6. [Configuration](#configuration)
-7. [YouTube extension](#youtube-extension)
-8. [Plex / Tautulli](#plex--tautulli)
-9. [Manual logging](#manual-logging)
-10. [Tadoku queue](#tadoku-queue)
-11. [Google Sheets](#google-sheets)
-12. [API reference](#api-reference)
-13. [Data & files](#data--files)
-14. [Tests](#tests)
-15. [Troubleshooting](#troubleshooting)
-16. [Roadmap / limits](#roadmap--limits)
+1. [60-second start](#60-second-start-docker)
+2. [How it works](#how-it-works)
+3. [Prerequisites](#prerequisites)
+4. [Setup with Docker (recommended)](#setup-with-docker-recommended)
+5. [Setup without Docker](#setup-without-docker)
+6. [Important URLs](#important-urls)
+7. [Configuration](#configuration)
+8. [YouTube extension](#youtube-extension)
+9. [Plex / Tautulli](#plex--tautulli)
+10. [Manual logging](#manual-logging)
+11. [Tadoku queue](#tadoku-queue)
+12. [Google Sheets](#google-sheets)
+13. [API reference](#api-reference)
+14. [Data & files](#data--files)
+15. [Tests](#tests)
+16. [Troubleshooting](#troubleshooting)
+17. [Roadmap / limits](#roadmap--limits)
 
 ---
 
@@ -87,25 +118,18 @@ SQLite is the source of truth. Sheets is a human-friendly view and input surface
 
 ## Setup with Docker (recommended)
 
-### One-shot setup (Windows)
-
-```powershell
-cd C:\path	o\immersion-tracker
-.\scripts\docker\setup.ps1
-```
-
-Creates `config/settings.yaml` + `.env` if missing, builds, starts, waits for health.
-
-### Helper scripts
+Prefer the root one-liners above (`.\setup.ps1` or `./setup.sh`). Same logic lives under `scripts/docker/`.
 
 | Script | Purpose |
 |--------|---------|
-| `.\scripts\docker\setup.ps1` | First-time setup + build + start |
-| `.\scripts\docker\start.ps1` | Start stack |
-| `.\scripts\docker\stop.ps1` | Stop stack (keeps `data/` + `config/`) |
-| `.\scripts\docker\rebuild.ps1` | Rebuild image + recreate container |
+| `.\setup.ps1` / `./setup.sh` | First-time setup + build + start (tracker only) |
+| `.\setup.ps1 -WithPlex` / `./setup.sh --with-plex` | Also start bundled Tautulli |
+| `.\scripts\docker\start.ps1` | Start tracker (`-WithPlex` optional) |
+| `.\scripts\docker\stop.ps1` | Stop (`data/` + `config/` kept) |
+| `.\scripts\docker\rebuild.ps1` | Rebuild tracker image |
 | `.\scripts\docker\logs.ps1` | Follow logs |
 | `.\scripts\docker\status.ps1` | Compose status + health + metrics |
+| `.\scripts\docker\ensure-up.ps1` | Fix Docker Desktop "port dead" flake |
 | `.\scripts\docker\shell.ps1` | Shell inside container |
 | `.\scripts\docker\sheets-init.ps1` | Create Google Sheet + wire config |
 | `.\scripts\docker\sheets-sync.ps1` | Force sheet sync now |
@@ -114,12 +138,17 @@ Creates `config/settings.yaml` + `.env` if missing, builds, starts, waits for he
 ### Manual Docker commands
 
 ```powershell
-cd C:\path	o\immersion-tracker
 copy config\settings.example.yaml config\settings.yaml   # if needed
-copy .env.example .env                                   # set WEBHOOK_SECRET
-docker compose up --build -d
+copy .env.example .env                                   # setup also auto-generates WEBHOOK_SECRET
+docker compose up --build -d immersion-tracker
 curl http://127.0.0.1:8000/api/health
 docker compose down
+```
+
+Bundled Tautulli is **opt-in** (`profiles: [plex]`):
+
+```powershell
+docker compose --profile plex up -d
 ```
 
 **Volumes (host folders, not anonymous Docker volumes):**
@@ -165,7 +194,7 @@ Without Google, use the API, `/queue` UI, or `export-local-csv.ps1`.
 Use **Python 3.13** if available:
 
 ```powershell
-cd C:\path	o\immersion-tracker
+cd immersion-tracker
 
 py -3.13 -m venv .venv
 .\.venv\Scripts\activate
@@ -342,7 +371,7 @@ Works in:
 
 3. Click **Load Temporary Add-on…**
 4. Select **`extension/manifest.json`** in this repo  
-   (`C:\path	o\immersion-tracker\extension\manifest.json`)
+   (`immersion-tracker\extension\manifest.json`)
 5. You should see **Immersion Tracker YouTube** listed and enabled.
 6. Open the extension panel (puzzle piece → pin the add-on) and set:
 
@@ -376,7 +405,7 @@ Works in:
 Optional: zip as `.xpi` for temporary load:
 
 ```powershell
-cd C:\path	o\immersion-tracker\extension
+cd immersion-tracker\extension
 Compress-Archive -Path manifest.json,*.js,*.html -DestinationPath ..\immersion-tracker-youtube.zip -Force
 Rename-Item ..\immersion-tracker-youtube.zip ..\immersion-tracker-youtube.xpi -Force
 # Then Load Temporary Add-on → pick the .xpi
@@ -476,6 +505,8 @@ extension/
 ---
 
 ## Plex / Tautulli
+
+Bundled Tautulli is optional (`docker compose --profile plex up -d` or `.\setup.ps1 -WithPlex`). You can also point an existing Tautulli install at the tracker.
 
 ### Endpoints
 
@@ -711,7 +742,7 @@ immersion-tracker/
 ## Tests
 
 ```powershell
-cd C:\path	o\immersion-tracker
+cd immersion-tracker
 .\.venv\Scripts\activate   # if using local venv
 python -m pytest -q
 ```
@@ -795,13 +826,10 @@ docker compose logs -f immersion-tracker
 
 ## Quick checklist
 
-- [ ] `docker compose up --build -d` (or local uvicorn)
+- [ ] `.\setup.ps1` or `./setup.sh` (Docker running)
 - [ ] `GET /api/health` returns ok
-- [ ] Set `WEBHOOK_SECRET` and match it in the extension / Tautulli
-- [ ] Firefox: `about:debugging` → load `extension/manifest.json`; popup **Test server** OK; finish a JP video to ≥90%
-- [ ] Optional: wire Plex/Tautulli webhook
-- [ ] Optional: enable Sheets + share spreadsheet with service account
-- [ ] Use `/queue` to approve pending anime/etc. and process READY exports
-- [ ] Copy `data/tadoku_export/` entries into tadoku.app as needed
+- [ ] Optional YouTube: load `extension/`; paste `data/extension-connect.txt` → **Test server**
+- [ ] Optional: Plex via `.\setup.ps1 -WithPlex` / Sheets via `sheets-init.ps1`
+- [ ] Use `/queue` to approve pending items and process READY exports
 
 Happy immersion.

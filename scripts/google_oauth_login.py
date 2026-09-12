@@ -13,7 +13,7 @@ Prerequisites:
 
 Run ON YOUR PC (not inside Docker the first time — needs a browser):
 
-  cd C:\\DevEnv\\immersion-tracker
+  cd path/to/immersion-tracker
   .\\.venv\\Scripts\\activate
   pip install -r requirements.txt
   python scripts/google_oauth_login.py

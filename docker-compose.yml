@@ -50,11 +50,14 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
-  # Watches your host Plex server; notifies immersion-tracker on "watched"
-  # First-run UI: http://127.0.0.1:8181  → link Plex → add Webhook agent
+  # Optional. Default setup does NOT start this.
+  #   docker compose --profile plex up -d
+  #   .\setup.ps1 -WithPlex   /  ./setup.sh --with-plex
+  # First-run UI: http://127.0.0.1:8181  → link Plex → Webhook agent
   tautulli:
     image: tautulli/tautulli:latest
     container_name: tautulli
+    profiles: ["plex"]
     ports:
       - "8181:8181"
     environment:

@@ -4,12 +4,11 @@
   Finish interactive setup for Steam, Spotify, Anki, mpv, asbplayer.
 
 .DESCRIPTION
-  Non-secret wiring (SteamID, mpv lua, AnkiConnect CORS, settings flags) is
-  done by the agent. This script collects API keys / OAuth and verifies each
-  integration against the running Docker app.
+  Collects API keys / OAuth and verifies integrations against the running app.
+  Run after .\setup.ps1 when you want Steam/Spotify/etc.
 
   Usage:
-    cd C:\path\to\immersion-tracker
+    cd immersion-tracker
     .\scripts\setup-integrations.ps1
     .\scripts\setup-integrations.ps1 -SteamApiKey "xxx" -SpotifyClientId "..." -SpotifyClientSecret "..."
 #>
