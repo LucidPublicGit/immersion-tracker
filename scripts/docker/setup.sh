@@ -9,12 +9,16 @@ cd "$ROOT"
 
 NO_BROWSER=0
 WITH_PLEX=0
+WIZARD=0
+NO_WIZARD=0
 for arg in "$@"; do
   case "$arg" in
     --no-browser) NO_BROWSER=1 ;;
     --with-plex) WITH_PLEX=1 ;;
+    --wizard) WIZARD=1 ;;
+    --no-wizard) NO_WIZARD=1 ;;
     -h|--help)
-      echo "Usage: $0 [--no-browser] [--with-plex]"
+      echo "Usage: $0 [--no-browser] [--with-plex] [--wizard] [--no-wizard]"
       exit 0
       ;;
   esac
@@ -163,5 +167,25 @@ if [[ "$ok" -eq 1 && "$NO_BROWSER" -eq 0 ]]; then
     xdg-open "http://127.0.0.1:8000/queue" >/dev/null 2>&1 || true
   elif command -v open >/dev/null 2>&1; then
     open "http://127.0.0.1:8000/queue" >/dev/null 2>&1 || true
+  fi
+fi
+
+# Nested flow: core never re-enters itself; wizard should use config against running app.
+if [[ "$ok" -eq 1 && "$NO_WIZARD" -eq 0 ]]; then
+  echo
+  wiz="$ROOT/scripts/setup-wizard.sh"
+  run_wiz() { bash "$wiz" --skip-core ${NO_BROWSER:+--no-browser} || true; }
+  if [[ "$WIZARD" -eq 1 ]]; then
+    echo "Core OK — starting feature wizard."
+    run_wiz
+  elif [[ -t 0 ]]; then
+    echo "Core OK. Optional features: ./scripts/setup-wizard.sh"
+    echo "  Flags: --tadoku --plex --gsm --hoshi --youtube --sheets --all"
+    read -r -p "Run feature wizard now? [Y/n] " ans || true
+    if [[ ! "${ans:-}" =~ ^[Nn]([Oo])?$ ]]; then
+      run_wiz
+    fi
+  else
+    echo "Feature wizard: ./scripts/setup-wizard.sh  (or ./setup.sh --wizard)"
   fi
 fi

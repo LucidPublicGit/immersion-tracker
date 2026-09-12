@@ -32,36 +32,60 @@ cd immersion-tracker
 ```bash
 git clone https://github.com/LucidPublicGit/immersion-tracker.git
 cd immersion-tracker
-chmod +x setup.sh && ./setup.sh
+chmod +x setup.sh scripts/setup-wizard.sh
+./setup.sh
 ```
 
 </td>
 </tr>
 </table>
 
+After health is OK, setup **asks to run the feature wizard** (or run it anytime):
+
+```powershell
+.\scripts\setup-wizard.ps1
+.\scripts\setup-wizard.ps1 -Tadoku -Plex -Gsm   # flags, no menu
+# or after core:  .\setup.ps1 -Wizard
+```
+
+```bash
+./scripts/setup-wizard.sh
+```
+
+The wizard **checks prerequisites** (Docker, tracker, etc.) and does not assume GSM/Plex/Hoshi are installed. Missing tools get install links; config-only mode still writes `.env` / cheat sheets. It asks which pieces you want (**all optional**), then walks each one with links + prompts:
+
+| Feature | What you get |
+|---------|----------------|
+| **Tadoku.app** | Queue login, list `registration_id`, write contest into `settings.yaml` |
+| **Plex / Tautulli** | Start Tautulli, webhook URL with your secret, library_map tip |
+| **GameSentenceMiner** | Auto-find `gsm.db`, set `GSM_DATA_DIR`, enable GSM |
+| **Hoshi / Boox** | Drive-poll enable + device checklist |
+| **YouTube** | Extension + `data/extension-connect.txt` |
+| **Google Sheets** | Pointers to SA / OAuth helpers |
+
+Typical contest setup: **Tadoku + Plex and/or GSM and/or Hoshi**.
+
 ### 2. Open the app
 
 | | |
 |--|--|
 | **App** | http://127.0.0.1:8000/ |
-| **Queue** | http://127.0.0.1:8000/queue |
+| **Queue** (approve → Tadoku) | http://127.0.0.1:8000/queue |
 | **Health** | http://127.0.0.1:8000/api/health → should say `ok` |
-| **Extension URL + secret** | `data/extension-connect.txt` (created by setup) |
+| **Extension URL + secret** | `data/extension-connect.txt` |
 
 Setup creates `config/settings.yaml` + `.env`, generates a webhook secret, starts **only** the tracker container, and opens the queue UI.
 
-### 3. (Optional) YouTube extension
+### 3. Daily Tadoku loop
 
-1. Firefox: `about:debugging#/runtime/this-firefox` → Load Temporary Add-on → `extension/manifest.json`  
-   Chrome: `chrome://extensions` → Developer mode → Load unpacked → `extension/`
-2. Popup → gear → paste **Server URL** + **Webhook secret** from `data/extension-connect.txt` → **Test server**
+1. Plex / GSM / Hoshi / YouTube / manual logs land in SQLite  
+2. Open **Queue** → Approve (or Process READY)  
+3. With login + `registration_id`, Approve can **live-submit** to tadoku.app  
 
 ### Stop here unless you need more
 
-Sheets, Plex, Steam, Anki, etc. are **all optional**. Local DB + manual logs work with zero cloud setup.
-
-- Short optional steps: **[SETUP.md](SETUP.md)**
-- Full reference (config, API, integrations): **↓ below**
+- Guided optional steps: **`.\scripts\setup-wizard.ps1`** or **[SETUP.md](SETUP.md)**  
+- Full reference (config, API): **↓ below**
 
 ---
 

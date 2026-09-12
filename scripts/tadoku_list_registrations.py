@@ -2,10 +2,14 @@
 """
 List your ongoing Tadoku contest registrations (name + registration UUID).
 
-Uses TADOKU_COOKIE from the environment or .env in the project root.
+Cookie sources (first match wins):
+  1. data/tadoku_session.cookie  (Queue UI "Save login")
+  2. env TADOKU_COOKIE / TADOKU_SESSION_COOKIE
+  3. .env TADOKU_COOKIE=
 
   cd path/to/immersion-tracker
-  .\\.venv\\Scripts\\python scripts\\tadoku_list_registrations.py
+  python scripts/tadoku_list_registrations.py
+  # or:  .\\scripts\\docker\\tadoku-list-registrations.ps1
 """
 from __future__ import annotations
 
@@ -17,13 +21,28 @@ from pathlib import Path
 import httpx
 
 API = "https://tadoku.app/api/internal/immersion/contests/ongoing-registrations"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_cookie() -> str:
-    c = os.environ.get("TADOKU_COOKIE", "").strip()
-    if c:
-        return c
-    env_path = Path(__file__).resolve().parent.parent / ".env"
+    for path in (
+        ROOT / "data" / "tadoku_session.cookie",
+        Path("/app/data/tadoku_session.cookie"),
+    ):
+        try:
+            if path.is_file():
+                text = path.read_text(encoding="utf-8").strip()
+                if text:
+                    return text
+        except OSError:
+            pass
+
+    for key in ("TADOKU_COOKIE", "TADOKU_SESSION_COOKIE"):
+        c = os.environ.get(key, "").strip()
+        if c:
+            return c
+
+    env_path = ROOT / ".env"
     if env_path.is_file():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("TADOKU_COOKIE="):
@@ -34,7 +53,13 @@ def load_cookie() -> str:
 def main() -> int:
     cookie = load_cookie()
     if not cookie:
-        print("TADOKU_COOKIE not set. Put it in .env first.", file=sys.stderr)
+        print(
+            "No Tadoku session found.\n"
+            "  1. Open http://127.0.0.1:8000/queue → Save login\n"
+            "  2. Re-run this script (reads data/tadoku_session.cookie)\n"
+            "Or set TADOKU_COOKIE in .env (legacy).",
+            file=sys.stderr,
+        )
         return 1
 
     headers = {

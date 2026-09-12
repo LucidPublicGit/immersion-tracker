@@ -3,12 +3,18 @@
 # Or:                   .\scripts\docker\setup.ps1
 param(
     [switch]$NoBrowser,
-    [switch]$WithPlex  # also start bundled Tautulli (profile: plex)
+    [switch]$WithPlex,  # also start bundled Tautulli (profile: plex)
+    [switch]$Wizard,    # run feature wizard after health OK
+    [switch]$NoWizard   # skip end prompt for wizard
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $Root
+
+function Test-Cmd([string]$Name) {
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
 
 function New-WebhookSecret {
     $bytes = New-Object byte[] 24
@@ -49,13 +55,28 @@ function Set-DotEnvValue([string]$Key, [string]$Value) {
 
 Write-Host "== Immersion Tracker — setup ==" -ForegroundColor Cyan
 
-# Docker running?
+# Docker installed + running? (do not assume)
+if (-not (Test-Cmd "docker")) {
+    Write-Host "Docker is not installed (or not on PATH)." -ForegroundColor Red
+    Write-Host "Install Docker Desktop, then re-run this script:" -ForegroundColor Yellow
+    Write-Host "  https://docs.docker.com/desktop/" -ForegroundColor Yellow
+    exit 1
+}
+try {
+    docker compose version 1>$null 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "compose missing" }
+} catch {
+    Write-Host "Docker Compose is not available." -ForegroundColor Red
+    Write-Host "Docker Desktop includes Compose. Details:" -ForegroundColor Yellow
+    Write-Host "  https://docs.docker.com/compose/install/" -ForegroundColor Yellow
+    exit 1
+}
 try {
     docker info 1>$null 2>$null
     if ($LASTEXITCODE -ne 0) { throw "docker info failed" }
 } catch {
-    Write-Host "Docker is not running (or not installed)." -ForegroundColor Red
-    Write-Host "Install Docker Desktop, start it, wait until it says Running, then re-run." -ForegroundColor Yellow
+    Write-Host "Docker is installed but the engine is not running." -ForegroundColor Red
+    Write-Host "Start Docker Desktop, wait until it says Running, then re-run." -ForegroundColor Yellow
     Write-Host "  https://docs.docker.com/desktop/" -ForegroundColor Yellow
     exit 1
 }
@@ -174,4 +195,25 @@ Write-Host "  .\scripts\docker\start.ps1 | stop.ps1 | status.ps1 | logs.ps1"
 
 if ($ok -and -not $NoBrowser) {
     try { Start-Process "http://127.0.0.1:8000/queue" } catch { }
+}
+
+# Guided feature setup (Tadoku / Plex / GSM / Hoshi / …)
+# Nested flow: core setup never re-enters itself. Wizard uses -SkipCore.
+if ($ok -and -not $NoWizard) {
+    Write-Host ""
+    $wiz = Join-Path $Root "scripts\setup-wizard.ps1"
+    if ($Wizard) {
+        Write-Host "Core OK — starting feature wizard (-SkipCore)." -ForegroundColor Cyan
+        & $wiz -SkipCore -NoBrowser:$NoBrowser
+    } elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+        Write-Host "Core OK. Optional features (Tadoku / Plex / GSM / Hoshi / …):" -ForegroundColor Cyan
+        Write-Host "  .\scripts\setup-wizard.ps1" -ForegroundColor Cyan
+        Write-Host "  .\scripts\setup-wizard.ps1 -Tadoku -Plex   # non-interactive flags" -ForegroundColor DarkGray
+        $ans = Read-Host "Run feature wizard now? [Y/n]"
+        if ($ans -notmatch '^(n|no)$') {
+            & $wiz -SkipCore -NoBrowser:$NoBrowser
+        }
+    } else {
+        Write-Host "Feature wizard: .\scripts\setup-wizard.ps1  (or .\setup.ps1 -Wizard)" -ForegroundColor Cyan
+    }
 }
