@@ -1,14 +1,73 @@
 # Immersion Tracker
 
-> **Status / expectations**
->
-> This is a **vibe-coded** personal project that was cleaned up enough to share. I am **not** aiming for polished architecture or production code quality. It works for me; it might work for you.
->
-> I **probably will not** maintain this for other users (no roadmap, no guaranteed fixes, no support SLA). Issues and PRs may sit forever. Fork it if you need it to evolve.
->
-> Use at your own risk. Back up your data.
+Self-hosted Japanese immersion logger (local SQLite, optional Sheets / Tadoku queue / YouTube extension).
 
-Self-hosted Japanese immersion logger. It records books, visual novels, games, anime, YouTube, and more into a local database, optionally mirrors them to **Google Sheets**, and maintains a **Tadoku.app** queue (what is pending, ready, pushed, or skipped).
+> Vibe-coded personal project, shared as-is — no support SLA. Fork if you need it to evolve. Back up your data.
+
+---
+
+# Quick start
+
+**Only requirement:** [Docker Desktop](https://docs.docker.com/desktop/) (or Engine + Compose) **running**.
+
+### 1. Clone + run setup
+
+<table>
+<tr>
+<td width="50%">
+
+**Windows (PowerShell)**
+
+```powershell
+git clone https://github.com/LucidPublicGit/immersion-tracker.git
+cd immersion-tracker
+.\setup.ps1
+```
+
+</td>
+<td width="50%">
+
+**Linux / macOS**
+
+```bash
+git clone https://github.com/LucidPublicGit/immersion-tracker.git
+cd immersion-tracker
+chmod +x setup.sh && ./setup.sh
+```
+
+</td>
+</tr>
+</table>
+
+### 2. Open the app
+
+| | |
+|--|--|
+| **App** | http://127.0.0.1:8000/ |
+| **Queue** | http://127.0.0.1:8000/queue |
+| **Health** | http://127.0.0.1:8000/api/health → should say `ok` |
+| **Extension URL + secret** | `data/extension-connect.txt` (created by setup) |
+
+Setup creates `config/settings.yaml` + `.env`, generates a webhook secret, starts **only** the tracker container, and opens the queue UI.
+
+### 3. (Optional) YouTube extension
+
+1. Firefox: `about:debugging#/runtime/this-firefox` → Load Temporary Add-on → `extension/manifest.json`  
+   Chrome: `chrome://extensions` → Developer mode → Load unpacked → `extension/`
+2. Popup → gear → paste **Server URL** + **Webhook secret** from `data/extension-connect.txt` → **Test server**
+
+### Stop here unless you need more
+
+Sheets, Plex, Steam, Anki, etc. are **all optional**. Local DB + manual logs work with zero cloud setup.
+
+- Short optional steps: **[SETUP.md](SETUP.md)**
+- Full reference (config, API, integrations): **↓ below**
+
+---
+
+# Full reference
+
+Everything under this line is documentation for integrations and internals — **not** required to run the tracker.
 
 | Feature | How it works |
 |---------|----------------|
@@ -28,57 +87,24 @@ Self-hosted Japanese immersion logger. It records books, visual novels, games, a
 
 **Stack:** Python 3.12+ (3.13 recommended), FastAPI, SQLite, optional gspread.
 
----
-
-## 60-second start (Docker)
-
-**Need:** [Docker Desktop](https://docs.docker.com/desktop/) (or Engine + Compose), running.
-
-```powershell
-git clone https://github.com/LucidPublicGit/immersion-tracker.git
-cd immersion-tracker
-.\setup.ps1
-```
-
-```bash
-git clone https://github.com/LucidPublicGit/immersion-tracker.git
-cd immersion-tracker
-chmod +x setup.sh && ./setup.sh
-```
-
-That creates `config/settings.yaml` + `.env`, generates a `WEBHOOK_SECRET`, starts **only** the tracker (not Tautulli), waits for health, and opens the queue UI.
-
-| After setup | URL / file |
-|-------------|------------|
-| App | http://127.0.0.1:8000/ |
-| Queue | http://127.0.0.1:8000/queue |
-| Extension cheat-sheet (URL + secret) | `data/extension-connect.txt` |
-
-**YouTube (optional):** load `extension/` in Firefox (`about:debugging` → temporary add-on) or Chrome (Load unpacked). Paste values from `data/extension-connect.txt` → **Test server**.
-
-**Sheets / Plex / Steam / …:** all optional. Local SQLite + manual logs work with zero cloud setup. Step-by-step: **[SETUP.md](SETUP.md)**.
-
----
-
 ## Table of contents
 
-1. [60-second start](#60-second-start-docker)
-2. [How it works](#how-it-works)
-3. [Prerequisites](#prerequisites)
-4. [Setup with Docker (recommended)](#setup-with-docker-recommended)
-5. [Setup without Docker](#setup-without-docker)
-6. [Important URLs](#important-urls)
-7. [Configuration](#configuration)
-8. [YouTube extension](#youtube-extension)
-9. [Plex / Tautulli](#plex--tautulli)
-10. [Manual logging](#manual-logging)
-11. [Tadoku queue](#tadoku-queue)
-12. [Google Sheets](#google-sheets)
-13. [API reference](#api-reference)
-14. [Data & files](#data--files)
-15. [Tests](#tests)
-16. [Troubleshooting](#troubleshooting)
-17. [Roadmap / limits](#roadmap--limits)
+1. [How it works](#how-it-works)
+2. [Prerequisites](#prerequisites)
+3. [Setup with Docker (scripts & volumes)](#setup-with-docker-scripts--volumes)
+4. [Setup without Docker](#setup-without-docker)
+5. [Important URLs](#important-urls)
+6. [Configuration](#configuration)
+7. [YouTube extension](#youtube-extension)
+8. [Plex / Tautulli](#plex--tautulli)
+9. [Manual logging](#manual-logging)
+10. [Tadoku queue](#tadoku-queue)
+11. [Google Sheets](#google-sheets)
+12. [API reference](#api-reference)
+13. [Data & files](#data--files)
+14. [Tests](#tests)
+15. [Troubleshooting](#troubleshooting)
+16. [Roadmap / limits](#roadmap--limits)
 
 ---
 
@@ -116,9 +142,11 @@ SQLite is the source of truth. Sheets is a human-friendly view and input surface
 
 ---
 
-## Setup with Docker (recommended)
+## Setup with Docker (scripts & volumes)
 
-Prefer the root one-liners above (`.\setup.ps1` or `./setup.sh`). Same logic lives under `scripts/docker/`.
+> **First run?** Use [Quick start](#quick-start) at the top (`.\setup.ps1` / `./setup.sh`). This section is the script/volume cheat sheet only.
+
+Same setup logic also lives under `scripts/docker/`.
 
 | Script | Purpose |
 |--------|---------|
@@ -598,7 +626,7 @@ Or edit the **Catalog** sheet (`tadoku_override` = `auto` | `pending` | `never`)
 
 ## Tadoku queue
 
-Target: **[tadoku.app](https://tadoku.app)** immersion contest logs (not the Eroge-Abyss desktop VN app).
+Target: **[tadoku.app](https://tadoku.app)** immersion contest logs.
 
 ### Rule resolution (highest wins)
 
