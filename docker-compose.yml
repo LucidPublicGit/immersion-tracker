@@ -1,0 +1,70 @@
+services:
+  immersion-tracker:
+    build: .
+    image: immersion-tracker:local
+    container_name: immersion-tracker
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:////app/data/immersion.db
+      CONFIG_PATH: /app/config/settings.yaml
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-changeme}
+      UI_USERNAME: ${UI_USERNAME:-admin}
+      UI_PASSWORD: ${UI_PASSWORD:-}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+      # Preferred: save username/password via Queue UI (encrypted under data/).
+      # Optional env fallbacks for headless setup:
+      TADOKU_USERNAME: ${TADOKU_USERNAME:-}
+      TADOKU_PASSWORD: ${TADOKU_PASSWORD:-}
+      # Legacy: raw browser Cookie header (auto-login preferred)
+      TADOKU_COOKIE: ${TADOKU_COOKIE:-}
+      # Optional: override GSM db path inside the container (default /gsm/gsm.db)
+      GSM_DB_PATH: ${GSM_DB_PATH:-/gsm/gsm.db}
+      # Local timezone for GSM "auto log at time" (and logs). Match your PC.
+      TZ: ${TZ:-UTC}
+      # Optional integration secrets (also readable from settings.yaml)
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
+      STEAM_ID: ${STEAM_ID:-}
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      AUDIOBOOKSHELF_TOKEN: ${AUDIOBOOKSHELF_TOKEN:-}
+      AUDIOBOOKSHELF_URL: ${AUDIOBOOKSHELF_URL:-}
+      ABS_TOKEN: ${ABS_TOKEN:-}
+      ABS_URL: ${ABS_URL:-}
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      # GameSentenceMiner data folder (host). Used for character preview + Tadoku cursor.
+      # Only writes stats_export_state.tadoku_incremental — never deletes game lines.
+      # Windows default: %APPDATA%\GameSentenceMiner  Set GSM_DATA_DIR in .env if needed.
+      - type: bind
+        source: ${GSM_DATA_DIR:-./data/gsm}
+        target: /gsm
+      # mpv JSONL history written by scripts/mpv/immersion-tracker.lua on the host
+      - type: bind
+        source: ${MPV_DATA_DIR:-./data/mpv}
+        target: /mpv
+        read_only: true
+    extra_hosts:
+      # AnkiConnect / host services from inside the container
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Watches your host Plex server; notifies immersion-tracker on "watched"
+  # First-run UI: http://127.0.0.1:8181  → link Plex → add Webhook agent
+  tautulli:
+    image: tautulli/tautulli:latest
+    container_name: tautulli
+    ports:
+      - "8181:8181"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./data/tautulli:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - immersion-tracker

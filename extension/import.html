@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lucid Immersion — Log from history</title>
+    <script>
+      // Backward-compatible entry: From history lives as a tab on the Activity page.
+      location.replace(
+        (typeof browser !== "undefined" && browser.runtime
+          ? browser.runtime.getURL("history.html")
+          : typeof chrome !== "undefined" && chrome.runtime
+            ? chrome.runtime.getURL("history.html")
+            : "history.html") + "#from-history"
+      );
+    </script>
+  </head>
+  <body>
+    <p style="font-family: system-ui, sans-serif; padding: 1.5rem">
+      Redirecting to Activity → From history…
+      <a id="fallback" href="history.html#from-history">Open manually</a>
+    </p>
+    <script>
+      try {
+        var u =
+          typeof browser !== "undefined" && browser.runtime
+            ? browser.runtime.getURL("history.html#from-history")
+            : typeof chrome !== "undefined" && chrome.runtime
+              ? chrome.runtime.getURL("history.html#from-history")
+              : "history.html#from-history";
+        document.getElementById("fallback").href = u;
+      } catch (_) {}
+    </script>
+  </body>
+</html>

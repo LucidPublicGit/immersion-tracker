@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Local secrets & runtime config (never commit)
+.env
+config/settings.yaml
+
+# Local data, credentials, databases, exports (never commit)
+data/**
+!data/.gitkeep
+
+# Pytest default SQLite (conftest TEST_DB); client fixture uses tmp_path instead
+tests/test_immersion.db
+tests/*.db
+tests/*.db-wal
+tests/*.db-shm
+
+# Packed extension artifacts (local only)
+dist/
+
+# Local tools (adb platform-tools, one-off scripts) — never commit
+tools/
+
+# Credential / secret file patterns anywhere
+*.pem
+*.key
+*credentials*.json
+*service-account*.json
+*oauth*token*.json
+*oauth*client*.json
+*spotify*token*.json
+spotify-oauth-token.json
+google-service-account.json
+google-oauth-client.json
+google-oauth-token.json
+google-sheet-info.txt
+
+# Local companion overrides that may contain WEBHOOK_SECRET
+scripts/asbplayer/*.local.js
+scripts/mpv/*.local.lua
+**/immersion-tracker.local.*
+
+# Generic JSON ignore for accidental dumps (keep extension manifest)
+*.json
+!extension/manifest.json
+!package.json
+!tsconfig.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+# Windows shell redirect mistake (echo ... > nul)
+nul
+NUL
+
+# Pi / agent local run artifacts (never commit)
+.pi/
+.pi-subagents/
+
+# Agent skill dumps & one-off design notes (local only)
+docs/skills/
+docs/design-review/
+
+# Logs
+*.log
+docker-build.log
+
+# Local agent notes (not for public consumers)
+AGENTS.md

@@ -1,0 +1,107 @@
+{
+  "manifest_version": 3,
+  "name": "Lucid Immersion Tracker — YouTube",
+  "version": "1.9.9",
+  "description": "Logs YouTube immersion to Lucid Immersion Tracker (once-ever video dedupe, min watch time, local queue, log from history).",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "immersion-tracker-youtube@local.dev",
+      "strict_min_version": "121.0"
+    }
+  },
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://m.youtube.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://[::1]/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "64": "icons/icon-64.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Lucid Immersion Tracker",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "64": "icons/icon-64.png",
+      "96": "icons/icon-96.png",
+      "128": "icons/icon-128.png"
+    },
+    "theme_icons": [
+      {
+        "light": "icons/icon-16.png",
+        "dark": "icons/icon-16.png",
+        "size": 16
+      },
+      {
+        "light": "icons/icon-32.png",
+        "dark": "icons/icon-32.png",
+        "size": 32
+      },
+      {
+        "light": "icons/icon-48.png",
+        "dark": "icons/icon-48.png",
+        "size": 48
+      },
+      {
+        "light": "icons/icon-64.png",
+        "dark": "icons/icon-64.png",
+        "size": 64
+      },
+      {
+        "light": "icons/icon-96.png",
+        "dark": "icons/icon-96.png",
+        "size": 96
+      },
+      {
+        "light": "icons/icon-128.png",
+        "dark": "icons/icon-128.png",
+        "size": 128
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://m.youtube.com/*"
+      ],
+      "js": ["page-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://m.youtube.com/*"
+      ],
+      "js": ["browser-api.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
+  }
+}
+

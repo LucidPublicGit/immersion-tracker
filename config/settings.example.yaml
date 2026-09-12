@@ -1,0 +1,313 @@
+# Copy to settings.yaml or mount as /app/config/settings.yaml
+
+language_default: ja
+
+youtube:
+  completion_threshold: 0.90
+  # Also require this much watch progress (seconds). 0 = ratio-only. Default 5 min.
+  min_watched_seconds: 300
+  channel_allowlist: []  # uploader filter; empty = all; e.g. ["UC..."]
+  channel_blocklist: []
+  # Signed-in viewer accounts allowed to log (UC… or @handle). Empty = any.
+  # e.g. ["@MyImmersionHandle", "UCxxxxxxxxxxxxxxxxxxxxxx"]
+  viewer_allowlist: []
+  tadoku_default: pending  # auto | pending | never
+  # Each video_id logs at most once (ever). Rewatches / next-day replays are duplicates.
+
+plex:
+  watch_threshold: 0.90
+  # Keys must match Plex library names exactly (case-sensitive)
+  library_map:
+    Anime: anime
+    Movies: show
+    TV Shows: show
+  # Language per library → log.language (Progress japanese_only filter)
+  library_language:
+    Anime: ja
+    Movies: en
+    TV Shows: en
+  tadoku_default: pending
+
+# Progress library shelf
+progress:
+  japanese_only: true
+  languages: [ja, jpn, japanese, jp]
+  # Extra title/key excludes (case-insensitive substring)
+  exclude_titles: []
+  exclude_series_keys: []
+  # Hide works where every log is Tadoku mode=never and title looks Western
+  hide_tadoku_never: true
+
+# Used for new log defaults and new catalog item default_unit (still editable).
+# Anime/show/YouTube/podcast/game/study → minutes; book/manga/VN → characters.
+content_type_defaults:
+  book:
+    activity: reading
+    unit: characters
+    tadoku_mode: pending
+  audiobook:
+    activity: listening
+    unit: minutes_high_density
+    tadoku_mode: pending
+  manga:
+    activity: reading
+    unit: characters
+    tadoku_mode: pending
+  visual_novel:
+    activity: reading
+    unit: characters
+    tadoku_mode: pending
+  game:
+    activity: reading
+    unit: minutes
+    tadoku_mode: never
+  anime:
+    activity: listening
+    unit: minutes
+    tadoku_mode: pending
+  show:
+    activity: listening
+    unit: minutes
+    tadoku_mode: pending
+  youtube:
+    activity: listening
+    unit: minutes
+    tadoku_mode: pending
+  podcast:
+    activity: listening
+    unit: minutes
+    tadoku_mode: pending
+  study:
+    activity: study
+    unit: minutes
+    tadoku_mode: never
+
+# Tadoku score estimates (Japanese official multipliers)
+tadoku_scores:
+  reading:
+    pages: 1.0
+    two_column_pages: 1.6
+    comic_pages: 0.2
+    sentences: 0.05
+    characters: 0.0025
+    minutes: 0.4  # fallback if tracking VN/game as time
+  listening:
+    minutes: 0.4
+    minutes_high_density: 0.6
+  study:
+    minutes: 0.5
+
+tadoku:
+  live_submit: true
+  auto_submit_on_approve: true
+  api_base: "https://tadoku.app/api/internal/immersion"
+  language_code: jpn
+  # Prefer Queue UI username/password (encrypted under data/). Legacy cookie env:
+  session_cookie_env: TADOKU_COOKIE
+  # Optional Tadoku account UUID for Progress → Pull from Tadoku
+  # user_id: ""
+  contest:
+    name: ""  # optional display name
+    # UUID from URL /contests/{id}/leaderboard/1
+    contest_id: ""  # UUID from /contests/{id}/leaderboard
+    registration_id: ""
+  unit_ids: {}
+
+# Media metadata for Progress covers / episode totals
+metadata:
+  none_retry_days: 14          # re-try source=none after this many days
+  min_match_score: 75          # 0–100; higher = fewer wrong covers
+  tmdb_api_key: ""             # free key from themoviedb.org (or env TMDB_API_KEY)
+  vndb_token: ""               # optional; VN search works without it
+  jikan_min_interval_ms: 400
+  open_library: true
+  vndb: true
+  tmdb: true
+  jiten: true
+  jikan: true
+  anilist: true
+  steam: true                  # game covers via Steam store search (no key)
+  wikipedia: true              # cover fallback when other providers miss
+  tvmaze: true                 # Western TV covers + episode counts (no key; Arcane, etc.)
+
+# Hoshi Reader (Boox) → auto reading logs (characters)
+# Device setup via ADB: scripts/boox-hoshi-setup.ps1
+# Progress poll default: Google Drive (release Hoshi blocks ADB private storage).
+# See docs/HOSHI.md
+hoshi:
+  enabled: false
+  source: drive                        # drive | adb | auto
+  adb:
+    binary: adb                        # or full path to adb.exe
+    serial: ""                         # optional; pin device from `adb devices`
+    connect: ""                        # optional wireless: "192.168.1.50:5555"
+    package: moe.antimony.hoshi
+    books_path: ""                     # optional override if auto-detect fails
+  root_folder_name: "ttu-reader-data"  # Hoshi/TTU Drive folder name
+  root_folder_id: ""
+  poll_seconds: 300                    # scheduler interval (≥60)
+  content_type: book
+  unit: characters
+  min_characters: 1                    # min remote delta to notice
+  bootstrap: false                     # first sight of a day = baseline only
+  log_mode: manual                     # manual | auto
+  min_submit_characters: 500           # auto: need this many pending chars
+  auto_submit_idle_minutes: 30         # auto: wait after last stats delta (no mid-read logs)
+  tadoku_default: ""
+
+# GameSentenceMiner (GSM) — Stats→Tools→Tadoku equivalent
+# Reads game_lines (never deletes). Optionally advances GSM's tadoku_incremental
+# cursor after a full successful export so GSM preview resets in sync.
+gsm:
+  enabled: true
+  # Empty = auto-detect: GSM_DB_PATH env, /gsm/gsm.db (Docker), %APPDATA%/GameSentenceMiner/gsm.db
+  db_path: ""
+  content_type: visual_novel           # fallback when GSM game.type is unknown
+  tadoku_default: pending              # auto | pending | never
+  advance_cursor: true                 # write GSM watermark after batch fully pushed/skipped
+  log_mode: manual                     # manual | auto (scheduler when min+idle met)
+  min_submit_characters: 10000         # per-game pending chars before auto export
+  auto_submit_idle_minutes: 30         # quiet period after newest line for that game
+  deduplicate: false                   # exclude repeated line text from counts
+  strip_punctuation: true              # match GSM: drop punct/symbols/whitespace before counting
+  collapse_repeated_blocks: true       # one line that is the same block × N → count once (mail hook spam)
+  require_japanese: true               # skip clipboard/code/English (JP immersion)
+  max_line_characters: 0               # 0 = off; e.g. 5000 caps any single line after collapse
+  poll_seconds: 120                    # continuous auto-export job interval
+  auto_log_at_time_enabled: false      # daily dump at fixed local hour (default off)
+  auto_log_at_hour: 4                  # 0–23 local
+  timezone: UTC        # used when TZ env is unset
+
+# Audiobookshelf — listening sessions → minutes (Inbox panel)
+# Token: ABS user Settings → API (or env AUDIOBOOKSHELF_TOKEN / ABS_TOKEN)
+audiobookshelf:
+  enabled: false
+  base_url: "http://host.docker.internal:13378"  # or http://127.0.0.1:13378
+  api_token: ""                          # prefer env AUDIOBOOKSHELF_TOKEN
+  poll_seconds: 120
+  content_type: audiobook
+  podcast_content_type: podcast
+  include_books: true
+  include_podcasts: true
+  library_ids: []                        # empty = all
+  min_session_seconds: 0                 # 0 = bank all session growth (yaabsa small syncs)
+  unit: minutes_high_density             # tadoku "minute (high density)"
+  activity: listening
+  tadoku_default: pending
+  bootstrap: true                        # first poll skips historical listening
+  use_position: true                     # playhead currentTime (yaabsa/ABS bookmark)
+  max_play_speed: 2.5                    # position credit ≤ wall_clock × this
+  use_listening_stats: true              # ABS lifetime timeListening per item
+  log_mode: manual                       # manual | auto (min + idle)
+  min_submit_minutes: 5
+  auto_submit_idle_minutes: 30
+  auto_log_at_time_enabled: false        # daily dump at fixed local hour
+  auto_log_at_hour: 4
+  timezone: UTC
+
+# Steam Web API playtime deltas (allowlist appids recommended)
+# API key: https://steamcommunity.com/dev/apikey  steam_id = SteamID64
+steam:
+  enabled: false
+  api_key: ""                      # or env STEAM_API_KEY
+  steam_id: ""                     # SteamID64
+  poll_seconds: 600
+  app_allowlist: []                # e.g. [1234560] — empty = all (noisy)
+  app_blocklist: []
+  name_allowlist: []               # substring match when app allowlist empty
+  name_blocklist: []
+  min_delta_minutes: 1.0
+  content_type: game
+  unit: minutes
+  activity: reading
+  tadoku_default: never
+  bootstrap: false                 # first sight = baseline only
+
+# AnkiConnect → study minutes (Anki must be running)
+# Docker: use host.docker.internal; allow origin in AnkiConnect config
+anki:
+  enabled: false
+  connect_url: "http://host.docker.internal:8765"
+  poll_seconds: 300
+  deck_allowlist: []               # empty = all decks
+  deck_blocklist: []
+  min_delta_minutes: 0.5
+  content_type: study
+  unit: minutes
+  activity: study
+  tadoku_default: never
+  title: Anki
+  series_key: anki
+
+# Spotify podcasts (OAuth once via scripts/spotify_oauth_setup.py)
+spotify:
+  enabled: false
+  client_id: ""                    # or env SPOTIFY_CLIENT_ID
+  client_secret: ""                # or env SPOTIFY_CLIENT_SECRET
+  token_file: "/app/data/spotify-oauth-token.json"
+  poll_seconds: 300
+  show_allowlist: []               # show ids and/or name substrings (recommended)
+  show_blocklist: []
+  podcasts_only: true
+  content_type: podcast
+  unit: minutes
+  activity: listening
+  tadoku_default: pending
+
+# mpv watch history / lua webhook → anime minutes
+# Mount host history dir or use scripts/mpv/immersion-tracker.lua
+mpv:
+  enabled: false
+  history_path: ""                 # e.g. /mpv/watch_history.jsonl
+  poll_seconds: 120
+  completion_threshold: 0.90
+  min_watched_seconds: 60
+  content_type: anime
+  tadoku_default: pending
+
+# asbplayer webhook (no server poll; companion posts when finished)
+asbplayer:
+  enabled: true
+  completion_threshold: 0.90
+  min_watched_seconds: 60
+  content_type: anime
+  tadoku_default: pending
+
+sheets:
+  enabled: false
+  spreadsheet_id: ""  # e.g. from docs.google.com/spreadsheets/d/<ID>/edit
+  # Auth: service account key OR user OAuth (if org blocks SA keys)
+  service_account_file: "/app/data/google-service-account.json"
+  oauth_client_secrets_file: "/app/data/google-oauth-client.json"
+  oauth_token_file: "/app/data/google-oauth-token.json"
+  tabs:
+    logs: Logs (All)
+    manual: Manual Entry
+    catalog: Catalog
+    rules: Rules
+    queue: Tadoku Queue
+    metrics: Metrics
+  # User-edit poll interval (sheet→DB reads). ≥15s; CPU idle between ticks.
+  poll_manual_seconds: 20
+  # DB→sheet push when dirty; hash-skips unchanged tabs. Keep slower than pull.
+  push_sync_seconds: 180
+  # Type tabs / Queue / Metrics = live formulas over Logs (All). Set false to
+  # restore old row-copy dumps.
+  formula_views: true
+
+scheduler:
+  enabled: true
+  sheet_sync_seconds: 180  # fallback push interval
+  tadoku_process_seconds: 300  # tadoku batch submit (independent of sheets)
+  # Minimal GET canaries for contest leaderboard page + API (not the full pytest suite)
+  tadoku_upstream_check: true
+  tadoku_upstream_check_hours: 12  # infrequent; also runs once on container start
+  youtube_noop: true  # YouTube is extension-driven; no poll
+
+api:
+  # Shared secret for extension / webhooks (set via env WEBHOOK_SECRET preferred)
+  webhook_secret: ""
+  # Optional HTTP Basic for HTML + most API (env UI_PASSWORD preferred). Empty = off.
+  # Webhooks and /api/youtube/* stay open to the extension (use webhook_secret).
+  ui_username: admin
+  ui_password: ""

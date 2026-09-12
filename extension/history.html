@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Lucid Immersion — Activity</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="page">
+    <div class="page-shell page-shell-wide">
+      <header class="topbar">
+        <div class="mark" aria-hidden="true">
+          <img src="icons/icon-48.png" width="32" height="32" alt="" />
+        </div>
+        <div class="brand-text">
+          <strong>Lucid Immersion</strong>
+          <span id="pageBrandSub">Activity</span>
+        </div>
+        <div class="topbar-actions">
+          <div id="serverChip" class="server-chip warn">…</div>
+          <button
+            type="button"
+            id="openSettings"
+            class="icon-btn"
+            title="Settings"
+            aria-label="Open settings"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="page">
+        <div class="page-tabs" role="tablist" aria-label="Extension pages">
+          <button
+            type="button"
+            class="page-tab active"
+            id="pageTabActivity"
+            data-page-tab="activity"
+            role="tab"
+            aria-selected="true"
+            aria-controls="panelActivity"
+          >
+            Activity
+          </button>
+          <button
+            type="button"
+            class="page-tab"
+            id="pageTabImport"
+            data-page-tab="import"
+            role="tab"
+            aria-selected="false"
+            aria-controls="panelImport"
+          >
+            From history
+          </button>
+        </div>
+
+        <!-- Activity panel -->
+        <div id="panelActivity" class="page-panel" role="tabpanel" aria-labelledby="pageTabActivity">
+          <div class="section-card">
+            <div class="section-head">
+              <span class="sum-left">
+                Local queue + server
+                <span class="sum-hint">full list</span>
+              </span>
+              <span class="header-actions">
+                <button type="button" id="refreshHistory" class="secondary mini">Refresh</button>
+                <button type="button" id="retryAllPending" class="secondary mini" title="Retry all pending / failed local deliveries">Retry queue</button>
+                <button type="button" id="clearHistory" class="secondary mini" title="Hide server rows in this list. Local pending items stay until synced or dismissed.">Clear list</button>
+              </span>
+            </div>
+            <div class="panel-b">
+              <div id="queueBanner" class="queue-banner" role="status">
+                <span id="queueBannerText">0 pending</span>
+                <button type="button" id="queueBannerRetry" class="secondary">Retry now</button>
+              </div>
+              <ul id="historyList" class="history-list">
+                <li class="empty">Loading activity…</li>
+              </ul>
+              <p class="hint">
+                <strong>Local first:</strong> progress and completions are saved in this browser
+                (survives extension reload). Statuses: <em>watching</em> → <em>pending</em> →
+                <em>accepted</em> (or <em>error</em> with auto-retry). Server rows appear after
+                the tracker accepts the webhook. Sheets still lag a few minutes.
+              </p>
+              <div class="links" style="margin-top:0.5rem">
+                <a href="#" id="linkSettings">Settings</a>
+                <a id="linkHome" href="#" target="_blank" rel="noopener">Dashboard</a>
+                <a id="linkQueue" href="#" target="_blank" rel="noopener">Tadoku queue</a>
+                <a id="linkLogs" href="#" target="_blank" rel="noopener">Tracker logs</a>
+              </div>
+              <div id="status" class="status-line"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- From history (import) panel -->
+        <div id="panelImport" class="page-panel" role="tabpanel" aria-labelledby="pageTabImport" hidden>
+          <div class="section-card feature-card">
+            <div class="section-head">
+              <span class="sum-left">
+                Log from history
+                <span class="sum-hint">YouTube watch history → immersion log</span>
+              </span>
+            </div>
+            <div class="panel-b">
+              <p class="feature-lead">
+                Pull untracked videos from
+                <strong>youtube.com/feed/history</strong>
+                (same Google account as this browser). Use this when live tab tracking
+                missed a watch — another device, a closed tab, or anything already on
+                your history feed.
+              </p>
+
+              <ol class="feature-steps" aria-label="How it works">
+                <li><strong>Scan</strong> history for a lookback window</li>
+                <li><strong>Review</strong> — approve immersion, reject the rest</li>
+                <li><strong>Log</strong> approved videos in one batch</li>
+              </ol>
+
+              <div class="import-controls">
+                <div class="import-controls-row">
+                  <label class="field import-days">
+                    Look back
+                    <select id="lookbackDays">
+                      <option value="1">1 day</option>
+                      <option value="3">3 days</option>
+                      <option value="7" selected>7 days (default)</option>
+                      <option value="14">14 days</option>
+                      <option value="30">30 days</option>
+                    </select>
+                  </label>
+                  <label class="row-check import-filters">
+                    <input type="checkbox" id="applyFilters" checked />
+                    Apply settings filters (channels, Shorts, Live, Japanese, min length)
+                  </label>
+                </div>
+                <div class="buttons tight">
+                  <button type="button" id="scanHistory">Scan history</button>
+                  <button type="button" id="openYtHistory" class="secondary" title="Open YouTube history in a tab">
+                    Open YT history
+                  </button>
+                </div>
+              </div>
+
+              <div id="scanMeta" class="import-meta" hidden></div>
+              <div id="importStatus" class="status-line"></div>
+              <p class="hint" style="margin-top:0.55rem">
+                Lookback, filters, and last scan results are saved in this browser — refresh keeps them.
+                <strong>Ready</strong> needs known progress ≥ threshold.
+                <strong>Unfinished</strong> includes progress unknown (still approvable).
+              </p>
+            </div>
+          </div>
+
+          <div class="section-card" id="reviewCard" hidden>
+            <div class="section-head">
+              <span class="sum-left">
+                Review candidates
+                <span class="sum-hint" id="reviewCount">0 candidates</span>
+              </span>
+              <span class="header-actions">
+                <button type="button" id="approveAll" class="secondary mini">Approve all</button>
+                <button type="button" id="rejectAll" class="secondary mini">Reject all</button>
+                <button type="button" id="resetDecisions" class="secondary mini">Reset</button>
+              </span>
+            </div>
+            <div class="panel-b">
+              <div class="import-tabs" role="tablist" aria-label="Candidate lists">
+                <button type="button" class="import-tab active" id="tabReady" data-tab="ready" role="tab" aria-selected="true">
+                  Ready to log
+                  <span class="import-tab-count" id="readyCount">0</span>
+                </button>
+                <button type="button" class="import-tab" id="tabUnfinished" data-tab="unfinished" role="tab" aria-selected="false">
+                  Unfinished / short
+                  <span class="import-tab-count" id="unfinishedCount">0</span>
+                </button>
+              </div>
+              <p class="hint" id="tabHint" style="margin-top:0.35rem">
+                Known progress ≥ threshold and ≥ min watched. Approve logs a full watch.
+              </p>
+              <div class="import-batch-bar">
+                <span id="decisionSummary">0 approve · 0 reject · 0 undecided</span>
+                <div class="buttons tight" style="margin:0">
+                  <button type="button" id="batchLog" disabled>Log approved</button>
+                  <button type="button" id="saveRejects" class="secondary" disabled>
+                    Save rejects
+                  </button>
+                </div>
+              </div>
+              <ul id="importList" class="import-list">
+                <li class="empty">Scan history to load candidates.</li>
+              </ul>
+              <p class="hint">
+                <strong>Approve</strong> = queue a full-length log using real video duration.
+                <strong>Reject</strong> = hide on future scans (stored in this browser).
+                <strong>Skip</strong> = leave undecided for now.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <p class="footer-note">Lucid Immersion Tracker · YouTube</p>
+      </main>
+    </div>
+    <script src="shared.js"></script>
+    <script src="import.js"></script>
+    <script src="history.js"></script>
+  </body>
+</html>

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Lucid Immersion Tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="popup">
+    <header class="topbar">
+      <div class="mark" aria-hidden="true">
+        <img src="icons/icon-48.png" width="32" height="32" alt="" />
+      </div>
+      <div class="brand-text">
+        <strong>Lucid Immersion</strong>
+        <span>YouTube extension</span>
+      </div>
+      <div class="topbar-actions">
+        <div id="serverChip" class="server-chip warn">…</div>
+        <button
+          type="button"
+          id="openHistory"
+          class="icon-btn"
+          title="Full activity history"
+          aria-label="Open history"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" stroke-linecap="round" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          id="openSettings"
+          class="icon-btn"
+          title="Settings"
+          aria-label="Open settings"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="page">
+      <!-- 1. This tab (primary work) -->
+      <div class="section-card" id="secWatch">
+        <div class="section-head">
+          <span class="sum-left">
+            This tab
+            <span id="logStatus" class="log-status idle" role="status" title="Open a YouTube watch page">
+              <span class="glyph" id="logStatusGlyph">·</span>
+              <span class="label" id="logStatusLabel">idle</span>
+            </span>
+          </span>
+        </div>
+        <div class="panel-b">
+          <button
+            type="button"
+            id="toggleChannel"
+            class="entity-toggle muted"
+            disabled
+            title="Click to block or allow this uploader. Blocked = never log any of their videos."
+          >
+            <span class="kind">Channel (uploader)</span>
+            <span class="name" id="channelToggleName">—</span>
+            <span class="state" id="channelToggleState">No channel yet</span>
+          </button>
+
+          <button
+            type="button"
+            id="toggleVideo"
+            class="entity-toggle muted"
+            disabled
+            title="Click to block or unblock only this video. Other videos from the channel are unchanged."
+          >
+            <span class="kind">This video</span>
+            <span class="name" id="videoToggleName">—</span>
+            <span class="state" id="videoToggleState">No video yet</span>
+          </button>
+
+          <div id="watchChips" class="chip-row"></div>
+
+          <div class="progress" title="Peak watch progress on this load">
+            <i id="watchBar"></i>
+          </div>
+          <div class="progress-meta">
+            <span id="watchPct">0% watched</span>
+            <span id="watchThrLabel">log at 90%</span>
+          </div>
+          <div class="buttons tight">
+            <button
+              type="button"
+              id="forceQueueTab"
+              class="primary"
+              title="Save this video to the local queue and push to the server now."
+            >
+              Queue this tab now
+            </button>
+          </div>
+          <p class="hint" style="margin-top:0.35rem">
+            Progress is stored in this browser. Filters &amp; server live in
+            <a href="#" id="linkSettings">Settings</a>.
+          </p>
+        </div>
+      </div>
+
+      <!-- 2. Delivery (local queue → server) — compact; shown when pending -->
+      <div class="section-card" id="secDelivery" hidden>
+        <div class="section-head">
+          <span class="sum-left">
+            Delivery
+            <span class="sum-hint">local queue → server</span>
+          </span>
+        </div>
+        <div class="panel-b">
+          <div id="queueBanner" class="queue-banner" role="status">
+            <span id="queueBannerText">0 pending</span>
+            <button type="button" id="queueBannerRetry" class="secondary">Retry now</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Log from history (collapsed by default) -->
+      <div class="section-card feature-card collapsible is-collapsed" id="secLogHistory" data-import-compact="1">
+        <div class="section-head section-head-toggle" id="logHistoryHead">
+          <button
+            type="button"
+            class="section-collapse-btn"
+            id="toggleLogHistory"
+            aria-expanded="false"
+            aria-controls="logHistoryBody"
+            title="Show or hide Log from history"
+          >
+            <span class="collapse-chevron" aria-hidden="true">▸</span>
+            <span class="sum-left">
+              Log from history
+              <span class="sum-hint" id="importSectionHint">ready only</span>
+            </span>
+          </button>
+          <span class="header-actions">
+            <button
+              type="button"
+              id="openImportFull"
+              class="secondary mini"
+              title="Open full From history page (Ready + Unfinished)"
+            >
+              Full page
+            </button>
+          </span>
+        </div>
+        <div class="panel-b" id="logHistoryBody" hidden>
+          <div class="import-controls import-controls-compact">
+            <div class="import-compact-row">
+              <label class="field import-days">
+                Look back
+                <select id="lookbackDays">
+                  <option value="1">1 day</option>
+                  <option value="3">3 days</option>
+                  <option value="7" selected>7 days</option>
+                  <option value="14">14 days</option>
+                  <option value="30">30 days</option>
+                </select>
+              </label>
+              <label class="row-check import-filters" title="Channels, Shorts, Live, Japanese, min length">
+                <input type="checkbox" id="applyFilters" checked />
+                Filters
+              </label>
+              <button type="button" id="scanHistory" class="secondary">Scan</button>
+            </div>
+          </div>
+          <div id="importStatus" class="status-line import-status-compact"></div>
+
+          <div id="reviewCard" class="import-review-inline" hidden>
+            <div class="import-batch-bar import-batch-bar-compact">
+              <span id="decisionSummary">0 ready</span>
+              <div class="buttons tight" style="margin:0">
+                <button type="button" id="approveAll" class="secondary mini">All</button>
+                <button type="button" id="batchLog" class="primary" disabled>Log</button>
+              </div>
+            </div>
+            <ul id="importList" class="import-list import-list-popup">
+              <li class="empty">No ready videos. Scan or open Full page.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Recent activity list only -->
+      <div class="section-card" id="secRecent">
+        <div class="section-head">
+          <span class="sum-left">
+            Latest activity
+            <span class="sum-hint">most recent only</span>
+          </span>
+          <span class="header-actions">
+            <button type="button" id="refreshHistory" class="secondary mini">Refresh</button>
+          </span>
+        </div>
+        <div class="panel-b">
+          <ul id="historyList" class="history-list">
+            <li class="empty">Loading…</li>
+          </ul>
+          <div class="links" style="margin-top:0.5rem">
+            <a href="#" id="linkHistory">View full history</a>
+            <a id="linkHome" href="#" target="_blank" rel="noopener">Dashboard</a>
+            <a id="linkQueue" href="#" target="_blank" rel="noopener">Tadoku queue</a>
+          </div>
+        </div>
+      </div>
+
+      <div id="status" class="status-line"></div>
+    </main>
+    <script src="shared.js"></script>
+    <script src="import.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

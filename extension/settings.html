@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Lucid Immersion — Settings</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="page">
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="mark" aria-hidden="true">
+          <img src="icons/icon-48.png" width="32" height="32" alt="" />
+        </div>
+        <div class="brand-text">
+          <strong>Lucid Immersion</strong>
+          <span>Settings</span>
+        </div>
+        <div class="topbar-actions">
+          <div id="serverChip" class="server-chip warn">…</div>
+          <button
+            type="button"
+            id="openHistory"
+            class="icon-btn"
+            title="Activity history"
+            aria-label="Open history"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 7v5l3 2" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="page">
+        <p class="hint" style="margin:0 0 0.75rem">
+          Advanced options for the YouTube extension. Changes auto-save to this browser only
+          (<code>storage.local</code>). Open the toolbar popup for live watch status.
+        </p>
+
+        <!-- Who can log -->
+        <details class="settings-block detect-panel warn" id="secViewer" open>
+          <summary>
+            <span class="sum-left">
+              Who can log (you)
+              <span class="sum-hint">detect + viewer list</span>
+            </span>
+          </summary>
+          <div class="panel-b">
+            <div id="detected" class="detect-main">Not checked yet</div>
+            <div id="detectDetail" class="detect-detail">
+              Open youtube.com signed in as your immersion account, then Detect.
+              This is <strong>you</strong> (the Google account) — not the video uploader.
+            </div>
+            <div class="buttons">
+              <button id="detect" type="button" class="secondary">Detect account</button>
+              <button id="useDetected" type="button" disabled>Add to viewer list</button>
+              <button id="pullServerConfig" type="button" class="secondary" title="Copy viewer/channel lists from server settings.yaml">
+                Pull from server
+              </button>
+            </div>
+
+            <label class="field" style="margin-top:0.75rem">Only log when signed in as
+              <textarea id="allowedViewers" placeholder="@YourHandle or UCxxxxxxxx"></textarea>
+            </label>
+            <p class="hint">
+              One @handle or UC… id per line. Empty = any account in this browser.
+              Server <code>viewer_allowlist</code> also enforces this and is auto-filled when this list is empty
+              (history scan works without a YouTube tab open).
+            </p>
+          </div>
+        </details>
+
+        <!-- Channel filters -->
+        <details class="settings-block" id="secChannels" open>
+          <summary>
+            <span class="sum-left">Which channels auto-log</span>
+          </summary>
+          <div class="panel-b">
+            <div class="radio-row">
+              <label>
+                <input type="radio" name="channelMode" id="channelModeAll" value="all" checked />
+                <span><strong>Any channel</strong> — log everyone except the blocklist</span>
+              </label>
+              <label>
+                <input type="radio" name="channelMode" id="channelModeAllowlist" value="allowlist" />
+                <span><strong>Allowlist only</strong> — log only uploaders listed below</span>
+              </label>
+            </div>
+            <p class="hint">
+              Tip: in the popup <em>This tab</em> panel, click a channel name to allow or block that uploader.
+            </p>
+
+            <label class="field">Uploader allowlist
+              <textarea id="channelAllowlist" placeholder="@ComprehensibleJapanese&#10;UCxxxxxxxx"></textarea>
+            </label>
+            <p class="hint">Only used in Allowlist only mode.</p>
+
+            <label class="field">Uploader blocklist
+              <textarea id="channelBlocklist" placeholder="@SomeEnglishChannel"></textarea>
+            </label>
+            <p class="hint">Always skip these uploaders.</p>
+
+            <label class="field">Blocked video IDs
+              <textarea id="videoBlocklist" placeholder="dQw4w9WgXcQ"></textarea>
+            </label>
+            <p class="hint">Single-video skips. Toggle from the popup while watching.</p>
+          </div>
+        </details>
+
+        <!-- Content filters -->
+        <details class="settings-block" id="secContent" open>
+          <summary>
+            <span class="sum-left">Content filters</span>
+          </summary>
+          <div class="panel-b">
+            <label class="row-check">
+              <input id="preferJapanese" type="checkbox" checked />
+              Japanese only (skip English &amp; other languages)
+            </label>
+            <p class="hint">Uses captions/audio language from the page. Title Japanese characters count as Japanese when unknown.</p>
+
+            <label class="field">When language is unknown
+              <select id="languageUnknownPolicy">
+                <option value="log">Still log (recommended)</option>
+                <option value="skip">Skip</option>
+              </select>
+            </label>
+
+            <label class="row-check">
+              <input id="blockShorts" type="checkbox" checked />
+              Skip Shorts
+            </label>
+            <label class="row-check">
+              <input id="blockLive" type="checkbox" checked />
+              Skip Live streams
+            </label>
+            <p class="hint">These apply to every video globally.</p>
+
+            <label class="field" for="minDurationSeconds">Minimum video length (seconds)
+              <input id="minDurationSeconds" type="number" min="0" max="36000" step="1" value="60" />
+            </label>
+            <p class="hint">0 = no minimum. Default 60 skips very short clips (by duration).</p>
+
+            <label class="field" for="minWatchedSeconds">Minimum watch time (seconds)
+              <input id="minWatchedSeconds" type="number" min="0" max="36000" step="1" value="300" />
+            </label>
+            <p class="hint">In addition to the % threshold. Default 300 (5 min). 0 = ratio only. Videos shorter than this can never auto-log.</p>
+          </div>
+        </details>
+
+        <!-- Logging + connection -->
+        <details class="settings-block" id="secConnection" open>
+          <summary>
+            <span class="sum-left">Logging &amp; connection</span>
+          </summary>
+          <div class="panel-b">
+            <label class="field">Server URL
+              <input id="serverUrl" type="text" placeholder="http://127.0.0.1:8000" autocomplete="off" />
+            </label>
+            <p class="hint">Immersion Tracker base URL (this PC or LAN host).</p>
+
+            <label class="field" for="webhookSecret">
+              <span class="field-label-row">
+                <span>Webhook secret <span id="secretChip" class="secret-chip warn">…</span></span>
+              </span>
+              <input
+                id="webhookSecret"
+                type="password"
+                placeholder="same as WEBHOOK_SECRET in .env"
+                autocomplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                spellcheck="false"
+              />
+            </label>
+            <p class="hint" id="webhookSecretHint">
+              Stored only in this browser (storage.local). Leave blank to keep a saved secret.
+            </p>
+            <div class="buttons tight">
+              <button type="button" id="clearSecret" class="secondary mini" title="Remove the saved secret from this browser">
+                Clear saved secret
+              </button>
+            </div>
+
+            <label class="field" for="thresholdPct">
+              <span class="field-label-row">
+                <span>Log after watching</span>
+                <span class="live" id="thresholdLive">90%</span>
+              </span>
+            </label>
+            <div class="threshold-row">
+              <input id="thresholdRange" type="range" min="50" max="100" step="1" value="90" />
+              <input id="thresholdPct" type="number" min="50" max="100" step="1" value="90" />
+              <span class="unit">%</span>
+            </div>
+            <p class="hint">
+              Only log once this much is watched (anti-scrub still applies). Default <strong>90%</strong>.
+            </p>
+
+            <label class="row-check">
+              <input id="enabled" type="checkbox" checked />
+              Extension enabled
+            </label>
+
+            <div class="buttons">
+              <button id="save" type="button">Save all</button>
+              <button id="test" type="button" class="secondary">Test server</button>
+            </div>
+            <div id="status" class="status-line"></div>
+          </div>
+        </details>
+
+        <div class="links">
+          <a href="#" id="linkHistory">Activity history</a>
+          <a id="linkHome" href="#" target="_blank" rel="noopener">Dashboard</a>
+          <a id="linkQueue" href="#" target="_blank" rel="noopener">Tadoku queue</a>
+          <a id="linkLogs" href="#" target="_blank" rel="noopener">Tracker logs</a>
+        </div>
+        <p class="footer-note">Lucid Immersion Tracker · YouTube extension settings</p>
+      </main>
+    </div>
+    <script src="shared.js"></script>
+    <script src="settings.js"></script>
+  </body>
+</html>
