@@ -734,7 +734,12 @@ def push_queue(
                 e.title,
                 e.season if e.season is not None else "",
                 e.episode if e.episode is not None else "",
-                tadoku_title(e.title, season=e.season, episode=e.episode),
+                tadoku_title(
+                    e.title,
+                    season=e.season,
+                    episode=e.episode,
+                    content_type=e.content_type,
+                ),
                 e.content_type,
                 e.amount,
                 e.unit,

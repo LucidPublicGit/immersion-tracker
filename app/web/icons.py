@@ -7,6 +7,7 @@ def icon(name: str) -> str:
     icons = {
         # Plex double-chevron (official-style mark)
         "plex": """<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4.07 0 0 12.02 4.07 24h4.73L4.74 12.02 8.8 0H4.07zm7.56 0-4.07 12.02L11.63 24h4.73l-4.06-11.98L16.36 0h-4.73zm7.57 0-4.07 12.02L19.2 24H24L19.93 12.02 24 0h-4.8z"/></svg>""",
+        "jellyfin": """<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 4.2 6.5v11L12 22l7.8-4.5v-11L12 2zm0 3.2 4.9 2.8v5.7L12 16.5l-4.9-2.8V8L12 5.2z"/></svg>""",
         # Tautulli-style: circular monitor / history mark (purple brand)
         "tautulli": """<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M12 6.5a1 1 0 0 1 1 1V12l3.2 1.9a1 1 0 1 1-1 1.7l-3.7-2.2A1 1 0 0 1 11 12.5v-5a1 1 0 0 1 1-1z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M18.5 7.2A8 8 0 0 0 7.2 5.5"/></svg>""",
         # Google Sheets green grid

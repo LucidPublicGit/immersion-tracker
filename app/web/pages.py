@@ -45,6 +45,7 @@ def _tool_urls() -> dict[str, str]:
     return {
         "tautulli": "http://127.0.0.1:8181",
         "plex": "http://127.0.0.1:32400/web",
+        "jellyfin": "http://127.0.0.1:8096",
         "tadoku": TADOKU_ORIGIN,
         "tadoku_contest": contest_url,
         "tadoku_club": club_url,
@@ -63,6 +64,7 @@ def _shell(title: str, body: str, active: str = "", extra_css: str = "") -> str:
         tadoku=urls["tadoku"],
         sheets=urls["sheets"],
         plex=urls["plex"],
+        jellyfin=urls["jellyfin"],
     )
     # Optional fonts — fall back to system stacks in CSS if blocked offline
     fonts = (
@@ -133,68 +135,46 @@ def _queue_chrome(
         <span class="sub">catalog search · one-shot → Tadoku</span>
       </summary>
       <div class="fold-body">
-        <div class="card-form" style="border:0;margin:0;padding:0">
+        <div class="card-form ql-form" style="border:0;margin:0;padding:0">
           <input type="hidden" id="ql-series" value=""/>
           <div class="row">
-            <div style="position:relative">
+            <div class="ql-type-field">
+              <label for="ql-type">Type</label>
+              <select id="ql-type" onchange="qlOnTypeChange()">
+                <option value="anime">Anime</option>
+                <option value="manga">Manga</option>
+                <option value="book">Book</option>
+                <option value="audiobook">Audiobook</option>
+                <option value="visual_novel">VN</option>
+                <option value="show">Show</option>
+                <option value="movie">Movie</option>
+                <option value="game">Game</option>
+                <option value="youtube">YouTube</option>
+                <option value="podcast">Podcast</option>
+                <option value="study">Study</option>
+              </select>
+            </div>
+            <div class="ql-title-field" style="position:relative;flex:1 1 14rem">
               <label for="ql-title">Title</label>
-              <input id="ql-title" placeholder="Search catalog…" autocomplete="off"
+              <input id="ql-title" placeholder="Work title…" autocomplete="off"
                 oninput="qlOnTitleInput()" onfocus="qlEnsureIndex()" onkeydown="qlOnTitleKey(event)"/>
               <div id="ql-suggest" class="ql-suggest" hidden role="listbox"></div>
-              <p class="field-hint" id="ql-hint" style="margin:0.25rem 0 0">Pick a catalog work to fill type / next ep.</p>
-            </div>
-            <div>
-              <label for="ql-type">Type</label>
-              <select id="ql-type">
-                <option value="anime">anime</option>
-                <option value="show">show</option>
-                <option value="movie">movie</option>
-                <option value="manga">manga</option>
-                <option value="book">book</option>
-                <option value="visual_novel">visual_novel</option>
-                <option value="game">game</option>
-                <option value="youtube">youtube</option>
-                <option value="podcast">podcast</option>
-                <option value="study">study</option>
-              </select>
             </div>
           </div>
-          <div class="row">
-            <div>
-              <label for="ql-amount">Amount</label>
+          <div class="row ql-metrics-row">
+            <div class="ql-amount-field">
+              <label id="ql-amount-label" for="ql-amount">Amount</label>
               <input id="ql-amount" type="number" step="any" min="0" placeholder="24"/>
             </div>
-            <div>
-              <label for="ql-unit">Unit</label>
-              <select id="ql-unit">
-                <option value="minutes">minutes</option>
-                <option value="minutes_high_density">minutes_high_density</option>
-                <option value="pages">pages</option>
-                <option value="comic_pages">comic_pages</option>
-                <option value="characters">characters</option>
-                <option value="sentences">sentences</option>
-              </select>
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label for="ql-activity">Activity</label>
-              <select id="ql-activity">
-                <option value="">— type default —</option>
-                <option value="listening">listening</option>
-                <option value="reading">reading</option>
-                <option value="watching">watching</option>
-                <option value="study">study</option>
-              </select>
-            </div>
-            <div>
-              <label>Season / Episode</label>
-              <div style="display:flex;gap:0.4rem">
-                <input id="ql-season" type="number" step="1" placeholder="S" style="flex:1"/>
-                <input id="ql-episode" type="number" step="1" placeholder="E" style="flex:1"/>
+            <div id="ql-pos-wrap" class="ql-pos-field">
+              <label id="ql-pos-label" for="ql-episode">Season / Episode</label>
+              <div class="ql-pos-inputs">
+                <input id="ql-season" type="number" step="1" placeholder="S"/>
+                <input id="ql-episode" type="number" step="1" placeholder="E"/>
               </div>
             </div>
           </div>
+          <p class="field-hint" id="ql-hint" style="margin:0.35rem 0 0">Unit &amp; activity from type.</p>
           <div class="form-actions">
             <div class="btn-row" style="margin-left:0">
               <button type="button" class="primary process" id="ql-submit" onclick="quickLog(true)">Log &amp; submit</button>
@@ -294,7 +274,6 @@ def _abs_fold_html(*, default_open: bool = False) -> str:
     <div class="gsm-actions abs-actions" id="abs-actions" hidden>
       <button type="button" class="primary process" id="abs-submit-btn" disabled>Log selected</button>
       <button type="button" class="secondary" id="abs-log-all-btn">Log all</button>
-      <button type="button" class="secondary" id="abs-refresh-btn">Refresh</button>
     </div>
     <div id="abs-msg" class="gsm-msg" aria-live="polite"></div>
 
@@ -412,7 +391,6 @@ def _gsm_fold_html(*, default_open: bool = False) -> str:
     <div class="gsm-actions" id="gsm-actions" hidden>
       <button type="button" class="primary process" id="gsm-submit-btn"
         title="Create logs and submit them to tadoku.app now">Log to Tadoku</button>
-      <button type="button" class="secondary" id="gsm-refresh-btn">Refresh</button>
     </div>
     <div id="gsm-msg" class="gsm-msg" aria-live="polite"></div>
 
@@ -717,6 +695,9 @@ def home_page() -> str:
       <div class="tool-grid">
         <a class="tool-tile plex" href="{escape(urls['plex'])}" target="_blank" rel="noopener">
           <span class="ico">{icon("plex")}</span>Plex<span class="go">↗</span>
+        </a>
+        <a class="tool-tile jellyfin" href="{escape(urls['jellyfin'])}" target="_blank" rel="noopener">
+          <span class="ico">{icon("jellyfin")}</span>Jellyfin<span class="go">↗</span>
         </a>
         <a class="tool-tile tautulli" href="{escape(urls['tautulli'])}" target="_blank" rel="noopener">
           <span class="ico">{icon("tautulli")}</span>Tautulli<span class="go">↗</span>
@@ -1500,6 +1481,16 @@ def queue_page() -> str:
       <a href="/logs">Logs</a> ·
       <a href="/">Dashboard</a>
     </div>
+    <div class="inbox-sync-bar" role="group" aria-label="Sync sources">
+      <button type="button" class="secondary" id="btn-mokuro-sync" onclick="pollMokuro()"
+        title="Fetch Mokuro Reader progress from Drive now">Sync Mokuro</button>
+      <button type="button" class="secondary" id="btn-poll"
+        title="Fetch Hoshi Reader progress from Drive now">Sync Hoshi</button>
+      <button type="button" class="secondary" id="gsm-refresh-btn"
+        title="Reload GameSentenceMiner pending characters">Sync GSM</button>
+      <button type="button" class="secondary" id="abs-refresh-btn"
+        title="Reload Audiobookshelf pending minutes">Sync ABS</button>
+    </div>
   </div>
   <details class="help-fold inbox-how">
     <summary>How this page works</summary>
@@ -1588,6 +1579,7 @@ def catalog_page() -> str:
       {sheets_link}
       <a href="{escape(urls['tautulli'])}" target="_blank" rel="noopener">Tautulli</a>
       · <a href="{escape(urls['plex'])}" target="_blank" rel="noopener">Plex</a>
+      · <a href="{escape(urls['jellyfin'])}" target="_blank" rel="noopener">Jellyfin</a>
       · <a href="/logs">Logs</a>
       · <a href="/queue">Queue</a>
     </div>
@@ -1596,7 +1588,7 @@ def catalog_page() -> str:
   <div class="how-card">
     <h2>How this works</h2>
     <ol class="how-steps">
-      <li><b>Plex</b> sends the library show title (often English).</li>
+      <li><b>Plex / Jellyfin</b> send the library show title (often English).</li>
       <li>Put that exact title in <b>aliases</b> so it maps to your <b>series_key</b>.</li>
       <li>Logs use your <b>display title</b> (e.g. JP name) in queue, sheet, and Tadoku.</li>
       <li><b>Tadoku mode</b> on the catalog row applies to <i>new</i> logs, and to past logs when you <b>Relink</b>.</li>
@@ -1606,6 +1598,16 @@ def catalog_page() -> str:
       → display <code>この素晴らしい世界に祝福を</code>
       · key <code>anime:konosuba</code>
     </p>
+  </div>
+
+  <div class="card-form">
+    <h2 class="card-h">Jellyfin · Japanese libraries</h2>
+    <label class="check-label" for="jf_auto_japanese">
+      <input type="checkbox" id="jf_auto_japanese" onchange="saveJellyfinPreference()"/>
+      Automatically submit new watches from Japanese libraries to Tadoku
+    </label>
+    <p class="field-hint">Uses the Jellyfin library language map (currently Anime and JPDrama). Other libraries stay pending. A show's Tadoku mode below takes precedence; existing logs are unchanged.</p>
+    <div id="jf_pref_msg" class="form-msg" role="status"></div>
   </div>
 
   <div class="card-form">
@@ -1703,6 +1705,34 @@ function msg(t, kind){{
   const el=document.getElementById('msg');
   el.textContent=t||'';
   el.className='form-msg'+(kind?(' '+kind):'');
+}}
+async function loadJellyfinPreference(){{
+  const box=document.getElementById('jf_auto_japanese');
+  try{{
+    const r=await fetch('/api/jellyfin/preferences');
+    if(!r.ok) throw new Error();
+    box.checked=(await r.json()).auto_japanese;
+    box.disabled=false;
+  }}catch(e){{
+    box.disabled=true;
+    document.getElementById('jf_pref_msg').textContent='Could not load Jellyfin setting. Refresh to try again.';
+  }}
+}}
+async function saveJellyfinPreference(){{
+  const box=document.getElementById('jf_auto_japanese');
+  const message=document.getElementById('jf_pref_msg');
+  box.disabled=true;
+  try{{
+    const r=await fetch('/api/jellyfin/preferences',{{
+      method:'PATCH',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{auto_japanese:box.checked}})
+    }});
+    if(!r.ok) throw new Error();
+    message.textContent='Jellyfin setting saved for future watches.';
+  }}catch(e){{
+    message.textContent='Could not save Jellyfin setting. Please try again.';
+    await loadJellyfinPreference();
+  }}finally{{box.disabled=false;}}
 }}
 function tadokuSelect(key, selected){{
   const opts=[
@@ -1884,6 +1914,7 @@ async function linkAlias(){{
   }}
 }}
 load();
+loadJellyfinPreference();
 </script>
 """
     return _shell("Catalog · Immersion Tracker", body, active="catalog")

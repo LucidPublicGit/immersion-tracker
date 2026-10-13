@@ -1,0 +1,46 @@
+name: immersion-tracker
+services:
+  immersion-tracker:
+    environment:
+      FORWARDED_ALLOW_IPS: "127.0.0.1,172.18.0.1,172.30.50.2"
+    ports: !override
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - type: bind
+        source: ${GSM_DATA_DIR}
+        target: /gsm
+        read_only: true
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  tautulli:
+    image: tautulli/tautulli@sha256:a4323bc09b27e265e269d79421ed3eb795083ef988bb84788eba89e5738c8005
+    ports: !override
+      - "127.0.0.1:8181:8181"
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  tailscale:
+    image: tailscale/tailscale@sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065
+    hostname: immersion-tracker-gateway
+    environment:
+      TS_BOOT_TIMEOUT: "30m"
+    networks:
+      default: {}
+      apps:
+        ipv4_address: 172.30.50.2
+    healthcheck:
+      test: ["CMD-SHELL", "tailscale status --json | grep -q 'BackendState.*Running'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+networks:
+  apps:
+    name: mini-services
+    ipam:
+      config:
+        - subnet: 172.30.50.0/24

@@ -53,6 +53,7 @@ scripts/mpv/*.local.lua
 !extension/manifest.json
 !package.json
 !tsconfig.json
+!config/tailscale/serve.json
 
 # OS / editor
 .DS_Store

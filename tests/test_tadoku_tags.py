@@ -71,6 +71,18 @@ def test_gsm_visual_novel_tags_as_vn_not_game_gsm(tmp_path):
     assert "gsm" not in tags
 
 
+def test_mokuro_manga_tag(tmp_path):
+    client = TadokuClient(export_dir=str(tmp_path / "exp"), dry_run=True)
+    entry = _entry(
+        content_type="manga",
+        source="mokuro",
+        unit="comic_pages",
+        amount=168,
+        activity="reading",
+    )
+    assert client._tags_for(entry) == ["manga"]
+
+
 def test_book_tag_no_hoshi(tmp_path):
     client = TadokuClient(export_dir=str(tmp_path / "exp"), dry_run=True)
     entry = _entry(content_type="book", source="hoshi", series_key="hoshi:Some Book")

@@ -8,7 +8,7 @@ def test_integrations_overview(client):
     assert r.status_code == 200
     body = r.json()
     names = {p["name"] for p in body["poll"]}
-    assert {"steam", "anki", "spotify", "mpv"} <= names
+    assert {"steam", "anki", "spotify", "mpv", "mokuro"} <= names
     wh = {w["name"] for w in body["webhooks"]}
     assert "asbplayer" in wh and "mpv" in wh
 

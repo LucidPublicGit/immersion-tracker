@@ -1,5 +1,5 @@
 """
-HTTP surface for poll-based and webhook integrations (Steam, Anki, Spotify, mpv, asbplayer).
+HTTP surface for poll-based and webhook integrations (Steam, Anki, Spotify, mpv, mokuro, asbplayer).
 
 Kept separate from core log/tadoku routes so each integration stays loosely coupled.
 Ingest logic lives under app/ingest/<name>.py — this module only wires HTTP.
@@ -32,6 +32,7 @@ def integrations_overview():
             {"name": "youtube", "path": "/api/webhooks/youtube"},
             {"name": "plex", "path": "/api/webhooks/plex"},
             {"name": "tautulli", "path": "/api/webhooks/tautulli"},
+            {"name": "jellyfin", "path": "/api/webhooks/jellyfin"},
             {"name": "mpv", "path": "/api/webhooks/mpv"},
             {"name": "asbplayer", "path": "/api/webhooks/asbplayer"},
         ],
@@ -227,6 +228,29 @@ def mpv_status_route(db: Session = Depends(get_db)):
 @router.post("/mpv/sync")
 def mpv_sync(db: Session = Depends(get_db)):
     return _poll_or_404("mpv", db)
+
+
+# ── Mokuro Reader ─────────────────────────────────────────────
+
+
+@router.get("/mokuro/status")
+def mokuro_status_route(db: Session = Depends(get_db)):
+    from app.ingest.mokuro import mokuro_status
+
+    return mokuro_status(db)
+
+
+@router.post("/mokuro/sync")
+def mokuro_sync(
+    db: Session = Depends(get_db),
+    dry_run: bool = Query(False, description="Parse Drive but do not write logs/watermarks"),
+):
+    from app.ingest.mokuro import poll_mokuro
+
+    result = poll_mokuro(db, dry_run=dry_run)
+    if result.logs_created:
+        mark_sheets_dirty(db)
+    return result.to_dict()
 
 
 @router.post("/webhooks/mpv")

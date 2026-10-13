@@ -198,6 +198,37 @@ Then run `.\scripts\setup-wizard.ps1` for guided feature steps (Docker-specific 
 
 ---
 
+## Phase 5b — Jellyfin (optional)
+
+Only if you use Jellyfin instead of (or in addition to) Plex.
+
+1. Install the **Webhook** plugin from the Jellyfin catalog.
+2. Add Generic destination → `http://<tracker-host>:8000/api/webhooks/jellyfin?secret=<WEBHOOK_SECRET>`
+3. Enable **Playback Stop**. Use the JSON template in [docs/JELLYFIN.md](docs/JELLYFIN.md).
+4. Align `jellyfin.library_map` in `config\settings.yaml` with your Jellyfin library names.
+5. Rebuild after config changes: `.\scripts\docker\rebuild.ps1`
+
+**Checkpoint:** finishing an episode creates a **pending** log (`source=jellyfin`).
+
+---
+
+## Phase 6 — Daily use
+
+| Task | How |
+|------|-----|
+| Start server | `.\scripts\docker\start.ps1` |
+| Stop server | `.\scripts\docker\stop.ps1` |
+| After code/config change | `.\scripts\docker\rebuild.ps1` |
+| Logs | `.\scripts\docker\logs.ps1` |
+| Force sheet sync | `.\scripts\docker\sheets-sync.ps1` |
+| Local CSV backup (no Google) | `.\scripts\docker\export-local-csv.ps1` |
+| YouTube | Watch in Firefox with extension loaded |
+| Manual without sheet | `POST /api/logs` or Manual Entry tab |
+| Tadoku review | http://127.0.0.1:8000/queue |
+| Firefox restart | Reload temporary add-on again |
+
+---
+
 ## Checklist
 
 - [ ] `.\setup.ps1` / `./setup.sh` → health OK  

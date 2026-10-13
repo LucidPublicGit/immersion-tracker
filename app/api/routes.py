@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 from app.api.deps import verify_webhook_secret
 from app.api.schemas import (
@@ -33,6 +34,7 @@ from app.api.schemas import (
 )
 from app.db.models import CatalogItem, LogEntry, TadokuStatus, utcnow
 from app.db.session import get_db
+from app.ingest.jellyfin import from_jellyfin_webhook, ingest_jellyfin_watch
 from app.ingest.plex import PlexWatchEvent, from_tautulli_webhook, ingest_plex_watch
 from app.ingest.service import (
     DuplicateLogError,
@@ -58,6 +60,10 @@ from app.tadoku import queue as tadoku_queue
 router = APIRouter()
 
 
+class JellyfinPreferences(BaseModel):
+    auto_japanese: bool
+
+
 @router.get("/health")
 def health():
     return {"status": "ok", "service": "immersion-tracker"}
@@ -68,7 +74,10 @@ def _log_out(entry) -> LogOut:
 
     data = LogOut.model_validate(entry)
     data.tadoku_title = tadoku_title(
-        entry.title, season=entry.season, episode=entry.episode
+        entry.title,
+        season=entry.season,
+        episode=entry.episode,
+        content_type=entry.content_type,
     )
     return data
 
@@ -203,6 +212,7 @@ def backup_database(background_tasks: BackgroundTasks):
     import tempfile
 
     from app.core.config import get_settings
+    from app.db.backup import sqlite_online_backup
 
     settings = get_settings()
     src = settings.sqlite_file_path()
@@ -220,10 +230,7 @@ def backup_database(background_tasks: BackgroundTasks):
     tmp_path = Path(tmp.name)
     tmp.close()
     try:
-        with sqlite3.connect(str(src)) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
-            with sqlite3.connect(str(tmp_path)) as dest:
-                conn.backup(dest)
+        sqlite_online_backup(src, tmp_path)
     except sqlite3.Error as e:
         try:
             tmp_path.unlink(missing_ok=True)
@@ -271,7 +278,7 @@ def get_recent_tadoku_logs(
 ):
     """
     Recently submitted (pushed) logs from the local database only.
-    Ordered by timestamp desc (immersion / Tadoku log time). Does not query tadoku.app.
+    Ordered by updated_at desc (submit time). Does not query tadoku.app.
     """
     return [_log_out(e) for e in tadoku_queue.list_recent_pushed(db, limit=limit)]
 
@@ -1008,6 +1015,39 @@ def webhook_tautulli(
     result = ingest_plex_watch(db, event)
     status = 201 if result.accepted else 200
     return JSONResponse(status_code=status, content=result.model_dump())
+
+
+@router.post("/webhooks/jellyfin")
+def webhook_jellyfin(
+    body: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_webhook_secret),
+):
+    if any(k in body for k in ("NotificationType", "ItemId", "ItemType", "SeriesName")):
+        event = from_jellyfin_webhook(body)
+    else:
+        try:
+            event = PlexWatchEvent.model_validate(body)
+        except Exception:
+            event = from_jellyfin_webhook(body)
+    result = ingest_jellyfin_watch(db, event)
+    status = 201 if result.accepted else 200
+    return JSONResponse(status_code=status, content=result.model_dump())
+
+
+@router.get("/jellyfin/preferences", response_model=JellyfinPreferences)
+def jellyfin_preferences(db: Session = Depends(get_db)):
+    from app.sheets.state import get_state
+
+    return JellyfinPreferences(auto_japanese=get_state(db, "jellyfin:auto_japanese") != "0")
+
+
+@router.patch("/jellyfin/preferences", response_model=JellyfinPreferences)
+def update_jellyfin_preferences(body: JellyfinPreferences, db: Session = Depends(get_db)):
+    from app.sheets.state import set_state
+
+    set_state(db, "jellyfin:auto_japanese", "1" if body.auto_japanese else "0")
+    return body
 
 
 @router.get("/catalog", response_model=list[CatalogOut])

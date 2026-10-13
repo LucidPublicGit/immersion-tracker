@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.db.models import LogEntry
 from app.ingest.service import DuplicateLogError, create_log
+
+_WATCH_SOURCES = ("plex", "jellyfin")
+_DEDUP_WINDOW = timedelta(days=7)
 
 
 class PlexWatchEvent(BaseModel):
@@ -24,12 +29,63 @@ class PlexWatchEvent(BaseModel):
     watched: bool = False
     finished_at: Optional[datetime] = None
     year: Optional[int] = None
+    season_num: Optional[int] = None
+    episode_num: Optional[int] = None
 
 
 class PlexIngestResult(BaseModel):
     accepted: bool
     reason: str
     log_id: Optional[int] = None
+
+
+def _recent_watch_duplicate(
+    db: Session,
+    *,
+    rating_key: str,
+    series_key: Optional[str],
+    season: Optional[int],
+    episode: Optional[int],
+    when: Optional[datetime],
+    movie: bool,
+) -> Optional[LogEntry]:
+    """Same Plex/Jellyfin watch already logged in the last week."""
+    ts = when or datetime.now(timezone.utc)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    q = db.query(LogEntry).filter(
+        LogEntry.source.in_(_WATCH_SOURCES),
+        LogEntry.timestamp >= ts - _DEDUP_WINDOW,
+    )
+    clauses = []
+    key = (rating_key or "").strip()
+    if key:
+        clauses.append(
+            or_(
+                LogEntry.source_ref == key,
+                LogEntry.source_ref.startswith(f"{key}:"),
+            )
+        )
+    sk = (series_key or "").strip()
+    if sk and movie:
+        clauses.append(
+            and_(
+                LogEntry.series_key == sk,
+                LogEntry.season.is_(None),
+                LogEntry.episode.is_(None),
+            )
+        )
+    elif sk and episode is not None:
+        clauses.append(
+            and_(
+                LogEntry.series_key == sk,
+                LogEntry.season == season,
+                LogEntry.episode == episode,
+            )
+        )
+    if not clauses:
+        return None
+    return q.filter(or_(*clauses)).order_by(LogEntry.id.desc()).first()
 
 
 def _ratio(event: PlexWatchEvent) -> float:
@@ -43,8 +99,8 @@ def _ratio(event: PlexWatchEvent) -> float:
     return 0.0
 
 
-def map_content_type(library_name: str, media_type: str) -> str:
-    cfg = get_settings().yaml_config.plex
+def map_content_type(library_name: str, media_type: str, cfg: Any = None) -> str:
+    cfg = cfg or get_settings().yaml_config.plex
     if library_name in cfg.library_map:
         return cfg.library_map[library_name]
     if media_type == "movie":
@@ -157,15 +213,20 @@ def from_tautulli_webhook(payload: dict[str, Any]) -> PlexWatchEvent:
         progress_percent=progress,
         watched=watched or (progress is not None and float(progress) >= 90),
         finished_at=datetime.now(timezone.utc),
+        season_num=season,
+        episode_num=episode,
     )
-    # Stash S/E for ingest without changing the public pydantic schema
-    event.__dict__["season_num"] = season
-    event.__dict__["episode_num"] = episode
     return event
 
 
-def ingest_plex_watch(db: Session, event: PlexWatchEvent) -> PlexIngestResult:
-    cfg = get_settings().yaml_config.plex
+def ingest_plex_watch(
+    db: Session,
+    event: PlexWatchEvent,
+    *,
+    source: str = "plex",
+    cfg: Any = None,
+) -> PlexIngestResult:
+    cfg = cfg or get_settings().yaml_config.plex
     ratio = _ratio(event)
     if not event.watched and ratio < cfg.watch_threshold:
         return PlexIngestResult(
@@ -173,7 +234,7 @@ def ingest_plex_watch(db: Session, event: PlexWatchEvent) -> PlexIngestResult:
             reason=f"below_threshold:{ratio:.3f}<{cfg.watch_threshold}",
         )
 
-    content_type = map_content_type(event.library_name, event.media_type)
+    content_type = map_content_type(event.library_name, event.media_type, cfg)
     series = event.grandparent_title or event.title
     from app.media.catalog_resolve import resolve_series
 
@@ -192,11 +253,29 @@ def ingest_plex_watch(db: Session, event: PlexWatchEvent) -> PlexIngestResult:
         amount = 0.0
 
     source_ref = f"{event.rating_key}:{event.finished_at.date().isoformat() if event.finished_at else 'na'}"
-    season = event.__dict__.get("season_num")
-    episode = event.__dict__.get("episode_num")
+    season = event.season_num
+    episode = event.episode_num
+    # Movies are single works — drop Plex S00E00 / index noise
+    is_movie = (content_type or "").strip().lower() in ("movie", "film") or (
+        event.media_type or ""
+    ).strip().lower() == "movie"
+    if is_movie:
+        season = None
+        episode = None
+    existing = _recent_watch_duplicate(
+        db,
+        rating_key=event.rating_key,
+        series_key=series_key,
+        season=season,
+        episode=episode,
+        when=event.finished_at,
+        movie=is_movie,
+    )
+    if existing:
+        return PlexIngestResult(accepted=False, reason="duplicate", log_id=existing.id)
     notes = (
         f"library={event.library_name}; ratio={ratio:.3f}; ep_title={event.title}; "
-        f"plex_title={series}; match={resolved.matched_by}"
+        f"{source}_title={series}; match={resolved.matched_by}"
     )
 
     # Language from library map (TV Shows → en) so Progress can hide non-JP media
@@ -215,12 +294,19 @@ def ingest_plex_watch(db: Session, event: PlexWatchEvent) -> PlexIngestResult:
         else:
             lib_lang = "ja"
 
+    tadoku_mode_override = None
+    if source == "jellyfin" and lib_lang == "ja" and not (resolved.catalog and resolved.catalog.tadoku_override):
+        from app.sheets.state import get_state
+
+        if get_state(db, "jellyfin:auto_japanese") != "0":
+            tadoku_mode_override = "auto"
+
     try:
         entry = create_log(
             db,
             content_type=content_type,
             title=title,
-            source="plex",
+            source=source,
             amount=amount if amount > 0 else 24.0,  # fallback ~episode
             unit="minutes",
             series_key=series_key,
@@ -231,6 +317,7 @@ def ingest_plex_watch(db: Session, event: PlexWatchEvent) -> PlexIngestResult:
             season=season,
             episode=episode,
             language=lib_lang or None,
+            tadoku_mode_override=tadoku_mode_override,
         )
     except DuplicateLogError as dup:
         return PlexIngestResult(accepted=False, reason="duplicate", log_id=dup.existing.id)

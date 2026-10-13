@@ -113,6 +113,16 @@ def create_log(
     if not unit and catalog and catalog.default_unit:
         unit = catalog.default_unit
     unit = unit or type_default_unit
+    unit_key = (unit or "").strip().lower().replace(" ", "_")
+    src = (source or "").strip().lower()
+    # Mokuro is comic pages (0.2). Other manga stays pages; tadoku.app maps comic_pages → page + manga tag.
+    if src == "mokuro":
+        unit = "comic_pages"
+    else:
+        if unit_key in ("comic_pages", "comic_page"):
+            unit = "pages"
+        if (content_type or "").strip().lower() == "manga":
+            unit = "pages"
 
     if not source_ref:
         source_ref = f"{source}:{uuid.uuid4().hex[:16]}"

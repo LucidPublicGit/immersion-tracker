@@ -75,6 +75,13 @@ POLL_INTEGRATIONS: list[IntegrationSpec] = [
         default_poll_seconds=120,
         job_id="mpv_poll",
     ),
+    IntegrationSpec(
+        name="mokuro",
+        config_attr="mokuro",
+        poll_path="app.ingest.mokuro:poll_mokuro",
+        default_poll_seconds=300,
+        job_id="mokuro_poll",
+    ),
 ]
 
 

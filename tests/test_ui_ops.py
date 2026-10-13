@@ -46,6 +46,30 @@ def test_backup_sqlite(client, tmp_path, monkeypatch):
     assert r.content[:15] == b"SQLite format 3" or len(r.content) > 100
 
 
+def test_weekly_db_backup_keeps_n(tmp_path):
+    import sqlite3
+
+    from app.db.backup import list_weekly_backups, run_weekly_db_backup, weekly_backup_dir
+
+    src = tmp_path / "immersion.db"
+    with sqlite3.connect(str(src)) as c:
+        c.execute("CREATE TABLE t (x INT)")
+        c.execute("INSERT INTO t VALUES (1)")
+
+    b1 = run_weekly_db_backup(src, keep=2)
+    assert b1 is not None and b1.is_file()
+    assert b1.read_bytes()[:15] == b"SQLite format 3"
+
+    bdir = weekly_backup_dir(src)
+    # Force older dated files so prune is testable same-day
+    (bdir / "immersion-weekly-20000101.db").write_bytes(b1.read_bytes())
+    (bdir / "immersion-weekly-20000108.db").write_bytes(b1.read_bytes())
+    (bdir / "immersion-weekly-20000115.db").write_bytes(b1.read_bytes())
+    run_weekly_db_backup(src, keep=2)
+    kept = list_weekly_backups(bdir)
+    assert len(kept) == 2
+
+
 def test_ui_basic_auth(client, monkeypatch):
     monkeypatch.setenv("UI_PASSWORD", "s3cret")
     monkeypatch.setenv("UI_USERNAME", "admin")

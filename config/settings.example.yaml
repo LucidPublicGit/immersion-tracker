@@ -28,6 +28,20 @@ plex:
     TV Shows: en
   tadoku_default: pending
 
+# Jellyfin Webhook plugin (Catalog → Webhook → Add Generic).
+# Keys must match Jellyfin library names (LibraryName / LibraryNameByMaxPath).
+jellyfin:
+  watch_threshold: 0.90
+  library_map:
+    Anime: anime
+    Movies: show
+    TV Shows: show
+  library_language:
+    Anime: ja
+    Movies: en
+    TV Shows: en
+  tadoku_default: pending
+
 # Progress library shelf
 progress:
   japanese_only: true
@@ -39,7 +53,7 @@ progress:
   hide_tadoku_never: true
 
 # Used for new log defaults and new catalog item default_unit (still editable).
-# Anime/show/YouTube/podcast/game/study → minutes; book/manga/VN → characters.
+# Anime/show/YouTube/podcast/game/study → minutes; book/VN → characters; manga → pages.
 content_type_defaults:
   book:
     activity: reading
@@ -51,7 +65,7 @@ content_type_defaults:
     tadoku_mode: pending
   manga:
     activity: reading
-    unit: characters
+    unit: pages
     tadoku_mode: pending
   visual_novel:
     activity: reading
@@ -154,6 +168,22 @@ hoshi:
   min_submit_characters: 500           # auto: need this many pending chars
   auto_submit_idle_minutes: 30         # auto: wait after last stats delta (no mid-read logs)
   tadoku_default: ""
+
+# Mokuro Reader (reader.mokuro.app) → manga page logs
+# Drive folder `mokuro-reader` / volume-data.json (same Google auth as Hoshi).
+# Share that folder with the Sheets SA, or use OAuth Drive scope.
+# First poll baselines current pages. Tadoku stays pending (approve in Queue).
+mokuro:
+  enabled: false
+  root_folder_name: "mokuro-reader"
+  root_folder_id: ""
+  poll_seconds: 300
+  content_type: manga
+  unit: comic_pages
+  activity: reading
+  min_pages: 1
+  bootstrap: false                     # first sight of a volume = baseline only
+  tadoku_default: pending              # always manual approve
 
 # GameSentenceMiner (GSM) — Stats→Tools→Tadoku equivalent
 # Reads game_lines (never deletes). Optionally advances GSM's tadoku_incremental

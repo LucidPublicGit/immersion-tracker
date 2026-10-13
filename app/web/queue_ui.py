@@ -4,10 +4,20 @@
 QUEUE_JS = r"""
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function epLabel(e){
+  const ct=(e.content_type||'').toLowerCase();
   const s=e.season, ep=e.episode;
-  if(s!=null && ep!=null) return `S${String(s).padStart(2,'0')}E${String(ep).padStart(2,'0')}`;
-  if(s!=null) return `S${String(s).padStart(2,'0')}`;
-  if(ep!=null) return `E${String(ep).padStart(2,'0')}`;
+  // Movies are single works — never S00E00 (Plex often sends 0/0).
+  if(ct==='movie'||ct==='film') return '—';
+  if((ct==='manga'||ct==='book'||ct==='comic') && ep!=null && (s==null||s==='')) return `Vol ${ep}`;
+  const sn=(s===''||s==null)?null:Number(s);
+  const en=(ep===''||ep==null)?null:Number(ep);
+  if(sn===0 && en===0) return '—';
+  if(sn!=null && !Number.isNaN(sn) && en!=null && !Number.isNaN(en)){
+    if(sn===0 && en===0) return '—';
+    return `S${String(sn).padStart(2,'0')}E${String(en).padStart(2,'0')}`;
+  }
+  if(sn!=null && !Number.isNaN(sn) && sn!==0) return `S${String(sn).padStart(2,'0')}`;
+  if(en!=null && !Number.isNaN(en) && en!==0) return `E${String(en).padStart(2,'0')}`;
   return '—';
 }
 function isYouTube(e){
@@ -42,6 +52,39 @@ function setMsg(t){
   const el=document.getElementById('msg');
   if(el) el.textContent=t||'';
 }
+function mokuroPagesHtml(e){
+  if((e.source||'')!=='mokuro') return `${e.amount} ${escapeHtml(e.unit||'')}`;
+  const notes=String(e.notes||'');
+  const m=notes.match(/pages\s+(\d+)\s*→\s*(\d+)\s*\(\+(\d+)\)/i);
+  const done=/\bcompleted\b/i.test(notes);
+  const logged=Number(e.amount)||(m?Number(m[3]):0);
+  const end=m?Number(m[2]):0;
+  if(done && end>0){
+    const ok=logged>=end;
+    const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';
+    return `<span class="mokuro-pages${ok?' done':''}" title="Logged pages / volume pages (UI only)">${logged}/${end}${check}</span>`;
+  }
+  return `<span class="mokuro-pages" title="Logged pages (volume not marked complete)">${logged} pages</span>`;
+}
+/** Last [tadoku] … line from log notes (submit failure detail). */
+function tadokuFailFromNotes(notes){
+  if(!notes) return '';
+  const lines=String(notes).split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  let last='';
+  for(const line of lines){
+    if(/^\[tadoku\]/i.test(line)) last=line.replace(/^\[tadoku\]\s*/i,'');
+  }
+  return last;
+}
+function formatProcessFailures(results){
+  if(!results||!results.length) return '';
+  const fails=results.filter(r=>r&&(r.status==='failed'||r.error));
+  if(!fails.length) return '';
+  return ' · ' + fails.slice(0,5).map(r=>{
+    const err=(r.error||r.note||'failed').toString().replace(/\s+/g,' ').slice(0,160);
+    return `#${r.id}: ${err}`;
+  }).join(' | ');
+}
 function numOrNull(v){
   if(v===''||v==null) return null;
   const n=Number(v);
@@ -49,17 +92,26 @@ function numOrNull(v){
 }
 
 /* —— Quick log: catalog typeahead + next ep autofill —— */
+const QL_UNIT_LABELS={
+  minutes:'minutes',
+  minutes_high_density:'minutes (dense)',
+  pages:'pages',
+  characters:'characters',
+  sentences:'sentences',
+};
+// unit locked per type (server also resolves if omitted). Manga = pages + manga tag.
 const QL_TYPE_DEFAULTS={
-  anime:{activity:'listening',unit:'minutes',amount:24},
-  show:{activity:'listening',unit:'minutes',amount:24},
-  movie:{activity:'listening',unit:'minutes',amount:90},
-  youtube:{activity:'listening',unit:'minutes',amount:null},
-  manga:{activity:'reading',unit:'comic_pages',amount:null},
-  book:{activity:'reading',unit:'pages',amount:null},
-  visual_novel:{activity:'reading',unit:'characters',amount:null},
-  game:{activity:'reading',unit:'characters',amount:null},
-  podcast:{activity:'listening',unit:'minutes',amount:null},
-  study:{activity:'study',unit:'minutes',amount:null},
+  anime:{unit:'minutes',amount:24,pos:'se'},
+  show:{unit:'minutes',amount:24,pos:'se'},
+  movie:{unit:'minutes',amount:90,pos:'none'},
+  youtube:{unit:'minutes',amount:null,pos:'none'},
+  manga:{unit:'pages',amount:null,pos:'vol'},
+  book:{unit:'characters',amount:null,pos:'vol'},
+  audiobook:{unit:'minutes_high_density',amount:null,pos:'none'},
+  visual_novel:{unit:'characters',amount:null,pos:'none'},
+  game:{unit:'minutes',amount:null,pos:'none'},
+  podcast:{unit:'minutes',amount:null,pos:'none'},
+  study:{unit:'minutes',amount:null,pos:'none'},
 };
 let _qlCatalog=null;      // [{series_key,display_title,content_type,default_unit,aliases,search}]
 let _qlProgressByKey=null; // series_key → progress item
@@ -70,6 +122,71 @@ let _qlSelectedKey='';
 
 function qlNorm(s){
   return String(s||'').toLowerCase().normalize('NFKC').replace(/[\s\-_]+/g,' ').trim();
+}
+function qlPosMode(ct){
+  const d=QL_TYPE_DEFAULTS[(ct||'').toLowerCase()];
+  return (d&&d.pos)||'none';
+}
+function qlIsReadingVol(ct){
+  return qlPosMode(ct)==='vol';
+}
+function qlUnitFor(ct){
+  const defs=QL_TYPE_DEFAULTS[(ct||'').toLowerCase()]||QL_TYPE_DEFAULTS.anime;
+  return defs.unit||'minutes';
+}
+function qlApplyTypeFields(opts){
+  opts=opts||{};
+  const typeEl=document.getElementById('ql-type');
+  const ct=(typeEl&&typeEl.value)||'anime';
+  const defs=QL_TYPE_DEFAULTS[ct]||QL_TYPE_DEFAULTS.anime;
+  const mode=defs.pos||'none';
+  const unit=qlUnitFor(ct);
+  const wrap=document.getElementById('ql-pos-wrap');
+  const label=document.getElementById('ql-pos-label');
+  const sEl=document.getElementById('ql-season');
+  const eEl=document.getElementById('ql-episode');
+  const amtLab=document.getElementById('ql-amount-label');
+  const amtEl=document.getElementById('ql-amount');
+  if(amtLab) amtLab.textContent=`Amount (${QL_UNIT_LABELS[unit]||unit})`;
+  if(amtEl){
+    if(unit==='minutes'||unit==='minutes_high_density') amtEl.placeholder=defs.amount!=null?String(defs.amount):'24';
+    else if(unit==='pages') amtEl.placeholder='20';
+    else if(unit==='characters') amtEl.placeholder='5000';
+    else amtEl.placeholder='';
+  }
+  if(wrap){
+    if(mode==='none'){
+      wrap.hidden=true;
+      if(sEl) sEl.value='';
+      if(eEl) eEl.value='';
+    }else{
+      wrap.hidden=false;
+      if(mode==='vol'){
+        if(label) label.textContent='Volume';
+        if(sEl){ sEl.hidden=true; sEl.value=''; sEl.style.display='none'; }
+        if(eEl){ eEl.hidden=false; eEl.style.display=''; eEl.placeholder='Vol'; }
+      }else{
+        if(label) label.textContent='Season / Episode';
+        if(sEl){ sEl.hidden=false; sEl.style.display=''; sEl.placeholder='S'; }
+        if(eEl){ eEl.hidden=false; eEl.style.display=''; eEl.placeholder='E'; }
+      }
+    }
+  }
+  if(opts.applyDefaults && amtEl && defs.amount!=null && !amtEl.value){
+    amtEl.value=String(defs.amount);
+  }
+}
+function qlOnTypeChange(){
+  qlApplyTypeFields({applyDefaults:true});
+  const ct=document.getElementById('ql-type')?.value||'';
+  const unit=qlUnitFor(ct);
+  const mode=qlPosMode(ct);
+  const unitLab=QL_UNIT_LABELS[unit]||unit;
+  qlSetHint(mode==='vol'
+    ? `Logs as ${unitLab} · optional volume.`
+    : mode==='se'
+      ? `Logs as ${unitLab} · optional S/E.`
+      : `Logs as ${unitLab}.`);
 }
 function qlSetHint(t){
   const el=document.getElementById('ql-hint');
@@ -140,33 +257,38 @@ function qlSearch(q){
   scored.sort((a,b)=>b.score-a.score||a.c.display_title.localeCompare(b.c.display_title));
   return scored.slice(0,12);
 }
-function qlNextEpisode(p){
+function qlNextEpisode(p, contentType){
   // Next unlogged S/E (or volume in episode field for manga/book).
+  const ct=(contentType||(p&&p.content_type)||'').toLowerCase();
+  const vol=qlIsReadingVol(ct);
   if(!p) return {season:null,episode:null,label:''};
   let s=p.progress_season;
   let e=p.progress_episode;
   if(e==null && p.max_episode!=null) e=p.max_episode;
   if(e==null && p.episodes_logged) e=p.episodes_logged;
+  if(vol) s=null; // reading: never carry season into volume field
   if(e==null){
-    // no progress position yet
-    if((p.content_type||'')==='anime'||(p.content_type||'')==='show'){
+    if(vol) return {season:null, episode:1, label:'start Vol 1'};
+    if(ct==='anime'||ct==='show'){
       return {season:s!=null?s:1, episode:1, label:'start S01E01'};
     }
     return {season:null,episode:null,label:'no prior position'};
   }
   e=Number(e)+1;
-  if(s!=null){
+  if(!vol && s!=null){
     const tot=(p.season_totals&&p.season_totals[String(s)])||null;
     if(tot!=null && e>Number(tot)){
       s=Number(s)+1;
       e=1;
     }
   }
-  const tag=s!=null
-    ? `S${String(s).padStart(2,'0')}E${String(e).padStart(2,'0')}`
-    : `E${String(e).padStart(2,'0')}`;
+  const tag=vol
+    ? `Vol ${e}`
+    : (s!=null
+      ? `S${String(s).padStart(2,'0')}E${String(e).padStart(2,'0')}`
+      : `E${String(e).padStart(2,'0')}`);
   const cur=p.current_display||p.progress_label||'';
-  return {season:s, episode:e, label:`next ${tag}${cur?` (was ${cur})`:''}`};
+  return {season:vol?null:s, episode:e, label:`next ${tag}${cur?` (was ${cur})`:''}`};
 }
 async function qlLastLog(seriesKey){
   try{
@@ -204,7 +326,11 @@ async function qlOnTitleInput(){
     if(sk) sk.value='';
   }
   await qlEnsureIndex();
-  if(!raw.trim()){ qlHideSuggest(); qlSetHint('Pick a catalog work to fill type / next ep.'); return; }
+  if(!raw.trim()){
+    qlHideSuggest();
+    qlSetHint('Pick type first; catalog fill is optional.');
+    return;
+  }
   qlPaintSuggest(qlSearch(raw));
 }
 function qlOnTitleKey(ev){
@@ -240,25 +366,27 @@ async function qlPick(i){
   const ct=c.content_type||'anime';
   qlSetSelect('ql-type', ct);
   const defs=QL_TYPE_DEFAULTS[ct]||QL_TYPE_DEFAULTS.anime;
+  qlApplyTypeFields();
 
-  // Prefer last log's unit/activity/amount; else catalog default_unit; else type defaults
+  // Prefer last log's amount; unit always from type
   const last=await qlLastLog(c.series_key);
-  const unit=(last&&last.unit)||c.default_unit||defs.unit;
-  const activity=(last&&last.activity)||defs.activity;
   let amount=(last&&last.amount!=null)?last.amount:defs.amount;
-  qlSetSelect('ql-unit', unit);
-  qlSetSelect('ql-activity', activity);
   const amtEl=document.getElementById('ql-amount');
   if(amtEl){
     if(amount!=null && Number(amount)>0) amtEl.value=String(amount);
     else if(!amtEl.value) amtEl.value=defs.amount!=null?String(defs.amount):'';
   }
 
-  const next=qlNextEpisode(p);
+  const next=qlNextEpisode(p, ct);
   const sEl=document.getElementById('ql-season');
   const eEl=document.getElementById('ql-episode');
-  if(sEl) sEl.value=next.season!=null?String(next.season):'';
-  if(eEl) eEl.value=next.episode!=null?String(next.episode):'';
+  if(qlPosMode(ct)==='none'){
+    if(sEl) sEl.value='';
+    if(eEl) eEl.value='';
+  }else{
+    if(sEl) sEl.value=next.season!=null?String(next.season):'';
+    if(eEl) eEl.value=next.episode!=null?String(next.episode):'';
+  }
   qlSetHint(`${c.display_title} · ${ct}${next.label?' · '+next.label:''}${last?` · last ${last.amount} ${last.unit}`:''}`);
 }
 
@@ -269,20 +397,27 @@ async function quickLog(submit){
   if(!title){ setMsg('Title required'); return; }
   if(!(amount>0)){ setMsg('Amount must be > 0'); return; }
   const series_key=(document.getElementById('ql-series')?.value||'').trim()||null;
+  const content_type=document.getElementById('ql-type')?.value||'anime';
+  const pos=qlPosMode(content_type);
+  let season=numOrNull(document.getElementById('ql-season')?.value);
+  let episode=numOrNull(document.getElementById('ql-episode')?.value);
+  if(pos==='none'){ season=null; episode=null; }
+  else if(pos==='vol'){ season=null; } // volume lives in episode only
   const body={
-    content_type:document.getElementById('ql-type')?.value||'anime',
+    content_type,
     title,
     amount,
-    unit:document.getElementById('ql-unit')?.value||'minutes',
-    activity:document.getElementById('ql-activity')?.value||null,
+    unit:qlUnitFor(content_type),
     series_key,
-    season:numOrNull(document.getElementById('ql-season')?.value),
-    episode:numOrNull(document.getElementById('ql-episode')?.value),
+    season,
+    episode,
     source:'manual',
     tadoku_mode:submit?'auto':'pending',
   };
-  if(!body.activity) delete body.activity;
+  // activity omitted → server resolve_activity_unit(content_type)
   if(!body.series_key) delete body.series_key;
+  if(body.season==null) delete body.season;
+  if(body.episode==null) delete body.episode;
   const btn=document.getElementById('ql-submit');
   if(btn) btn.disabled=true;
   setMsg(submit?'Logging & submitting…':'Queueing…');
@@ -298,7 +433,8 @@ async function quickLog(submit){
       return;
     }
     let status=j.tadoku_status||'';
-    let note=`#${j.id} · ${j.tadoku_title||j.title||title}`;
+    const posLabel=epLabel({content_type, season:j.season, episode:j.episode});
+    let note=`#${j.id} · ${j.title||title}${posLabel&&posLabel!=='—'?` · ${posLabel}`:''}`;
     if(submit && j.id){
       const ar=await fetch('/api/logs/'+j.id+'/approve',{method:'POST'});
       let aj=null; try{ aj=await ar.json(); }catch(e){}
@@ -308,16 +444,21 @@ async function quickLog(submit){
         return;
       }
       status=aj.tadoku_status||status;
-      note=`#${j.id} · ${aj.tadoku_title||aj.title||j.tadoku_title||title}`;
+      const pl=epLabel({content_type, season:aj.season??j.season, episode:aj.episode??j.episode});
+      note=`#${j.id} · ${aj.title||j.title||title}${pl&&pl!=='—'?` · ${pl}`:''}`;
     }
     setMsg(`${submit?'Submitted':'Queued'} ${note} · ${status}`);
     if(typeof showAppToast==='function' && j.id){
       showAppToast(`${submit?'Submitted':'Queued'} ${note}`,{logId:j.id});
     }
-    // keep series pinned; bump episode; clear amount only if not using last-log pattern
+    // keep series pinned; bump volume/episode when present
     const ep=document.getElementById('ql-episode');
-    if(ep && ep.value!=='' && Number.isFinite(Number(ep.value))){
+    if(pos!=='none' && ep && ep.value!=='' && Number.isFinite(Number(ep.value))){
       ep.value=String(Number(ep.value)+1);
+    }
+    if(pos==='vol'){
+      const sEl=document.getElementById('ql-season');
+      if(sEl) sEl.value='';
     }
     // refresh progress cache for next ep accuracy
     _qlProgressByKey=null;
@@ -597,11 +738,12 @@ async function loadQueue(){
       const channels=new Set(items.map(e=>(e.series_key||'').replace(/^yt:/,'')).filter(Boolean));
       metaBits=`${items.length} video(s)${channels.size?` · ${channels.size} channel(s)`:''}`;
     }else{
-      const epSummary=items.map(epLabel).filter(x=>x!=='—').join(', ') || 'no S/E';
+      const epSummary=items.map(epLabel).filter(x=>x!=='—').join(', ') || 'no position';
       metaBits=`${items.length} · ${epSummary}`;
     }
     const typeLabel=yt?'youtube':(head.content_type||'');
     const skLabel=yt?'':(head.series_key?` · ${escapeHtml(head.series_key)}`:'');
+    const posHead=yt?'Channel':(qlIsReadingVol(head.content_type)?'Vol':'Pos');
     const div=document.createElement('div');
     div.className='group'+(yt?' group-youtube':'');
     div.innerHTML=`
@@ -619,7 +761,7 @@ async function loadQueue(){
       </div>
       <table class="queue-table">
         <thead><tr>
-          <th>ID</th><th>When</th><th>${yt?'Channel':'S/E'}</th><th>Title</th><th>Amt</th><th>Score</th>
+          <th>ID</th><th>When</th><th>Title</th><th>${posHead}</th><th>Amt</th><th>Score</th>
           <th class="col-actions-q">Review</th>
         </tr></thead>
         <tbody></tbody>
@@ -627,19 +769,25 @@ async function loadQueue(){
     const tb=div.querySelector('tbody');
     for(const e of items){
       const tr=document.createElement('tr');
-      const tt=e.tadoku_title||e.title;
+      const tt=e.title||e.tadoku_title||'';
       const mid=yt
         ? escapeHtml((e.series_key||'').replace(/^yt:/,'')||'—')
         : escapeHtml(epLabel(e));
       const statusSel=statusSelectHtml(e.id, e.tadoku_status);
       const modeSel=modeSelectHtml(e.id, e.tadoku_mode);
+      const failDetail=tadokuFailFromNotes(e.notes);
+      const isFailed=(e.tadoku_status||'')==='failed';
+      if(isFailed) tr.classList.add('row-failed');
       tr.dataset.logId=String(e.id);
+      const failHtml=isFailed
+        ? `<div class="q-fail" title="${escapeHtml(failDetail||'Submit failed')}">${escapeHtml(failDetail||'Submit failed — open Edit / Logs for full notes')}</div>`
+        : '';
       tr.innerHTML=`
         <td class="row-id">${e.id}</td>
         <td>${(e.timestamp||'').slice(0,19)}</td>
+        <td title="${escapeHtml(e.tadoku_title||tt)}">${escapeHtml(tt)}${failHtml}</td>
         <td class="ep">${mid}</td>
-        <td>${escapeHtml(tt)}</td>
-        <td>${e.amount} ${escapeHtml(e.unit||'')}</td>
+        <td>${mokuroPagesHtml(e)}</td>
         <td>${e.tadoku_score_estimate!=null?Number(e.tadoku_score_estimate).toFixed(2):'—'}</td>
         <td class="col-actions-q">
           <div class="row-review">
@@ -650,6 +798,7 @@ async function loadQueue(){
               <div class="row-config-body">
                 <label>Status ${statusSel}</label>
                 <label>Mode ${modeSel}</label>
+                ${isFailed&&failDetail?`<p class="q-fail-detail">${escapeHtml(failDetail)}</p>`:''}
               </div>
             </details>
           </div>
@@ -752,10 +901,11 @@ async function loadRecentLogs(){
   }
   let html=`<div class="recent-table-wrap"><table class="recent-table">
     <thead><tr>
-      <th>ID</th><th>Sent</th><th>Logged</th><th>S/E</th><th>Title</th><th>Amt</th><th>Score</th><th>Remote</th><th class="col-actions-q"> </th>
+      <th>ID</th><th>Sent</th><th>Logged</th><th>Title</th><th>Pos</th><th>Amt</th><th>Score</th><th>Remote</th><th class="col-actions-q"> </th>
     </tr></thead><tbody>`;
   for(const e of data){
-    const tt=e.tadoku_title||e.title;
+    const tt=e.title||e.tadoku_title||'';
+    const tip=e.tadoku_title||tt;
     const sent=(e.updated_at||'').slice(0,19)||'—';
     const logged=(e.timestamp||'').slice(0,19)||'—';
     const rid=(e.tadoku_remote_id||'').trim();
@@ -766,21 +916,21 @@ async function loadRecentLogs(){
       ?` data-href="${escapeHtml(href)}" role="link" tabindex="0" title="Open on tadoku.app"`
       :' title="No tadoku.app page (missing remote id)"';
     const titleCell=href
-      ?`<a class="tadoku-log-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(tt)}</a>
+      ?`<a class="tadoku-log-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(tip)}">${escapeHtml(tt)}</a>
         <span class="muted"> · ${escapeHtml(e.content_type||'')}</span>`
-      :`${escapeHtml(tt)}
+      :`<span title="${escapeHtml(tip)}">${escapeHtml(tt)}</span>
         <span class="muted"> · ${escapeHtml(e.content_type||'')}</span>`;
     const remoteCell=href
       ?`<a class="tadoku-log-link remote-id" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(rid)}">${escapeHtml(ridShort)}</a>`
       :`<span class="remote-id" title="${escapeHtml(rid)}">${escapeHtml(ridShort||'—')}</span>`;
-    const delLabel=escapeHtml(tt||('#'+e.id));
+    const delLabel=escapeHtml(tip||('#'+e.id));
     html+=`<tr class="${rowClass}"${rowAttrs} data-log-id="${e.id}">
       <td class="row-id">${e.id}</td>
       <td class="sent-at">${escapeHtml(sent)}</td>
       <td>${escapeHtml(logged)}</td>
-      <td class="ep">${escapeHtml(epLabel(e))}</td>
       <td>${titleCell}</td>
-      <td>${e.amount} ${escapeHtml(e.unit||'')}</td>
+      <td class="ep">${escapeHtml(epLabel(e))}</td>
+      <td>${mokuroPagesHtml(e)}</td>
       <td>${e.tadoku_score_estimate!=null?Number(e.tadoku_score_estimate).toFixed(2):'—'}</td>
       <td>${remoteCell}</td>
       <td class="col-actions-q">
@@ -857,9 +1007,16 @@ async function deleteLogById(id, btn){
 async function act(id,kind){
   const r=await fetch(`/api/logs/${id}/${kind}`,{method:'POST'});
   const body=r.ok?await r.json():null;
-  setMsg(r.ok
-    ? `${kind} #${id} → ${body.tadoku_status}${body.tadoku_remote_id?' ('+body.tadoku_remote_id+')':''}`
-    : await r.text());
+  if(!r.ok){
+    setMsg(await r.text());
+  }else{
+    const st=body.tadoku_status||'';
+    const fail=st==='failed'?tadokuFailFromNotes(body.notes):'';
+    setMsg(
+      `${kind} #${id} → ${st}${body.tadoku_remote_id?' ('+body.tadoku_remote_id+')':''}`
+      +(fail?` · ${fail}`:'')
+    );
+  }
   loadQueue();
   loadRecentLogs();
   if(typeof refreshMetrics==='function') refreshMetrics();
@@ -868,7 +1025,9 @@ async function batchApprove(ids){
   if(!ids||!ids.length) return;
   const r=await fetch('/api/logs/batch/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
   const j=await r.json();
-  setMsg(r.ok?`group approve: pushed=${j.pushed} failed=${j.failed} skipped=${j.skipped}`:JSON.stringify(j));
+  setMsg(r.ok
+    ?`group approve: pushed=${j.pushed} failed=${j.failed} skipped=${j.skipped}${formatProcessFailures(j.results)}`
+    :JSON.stringify(j));
   loadQueue();
   loadRecentLogs();
   if(typeof refreshMetrics==='function') refreshMetrics();
@@ -884,13 +1043,33 @@ async function batchSkip(ids){
 async function processAll(){
   const r=await fetch('/api/tadoku/process',{method:'POST'});
   const j=await r.json();
-  setMsg(`pushed=${j.pushed} failed=${j.failed}`);
+  setMsg(`pushed=${j.pushed} failed=${j.failed}${formatProcessFailures(j.results)}`);
   loadQueue();
   loadRecentLogs();
   if(typeof refreshMetrics==='function') refreshMetrics();
   // Manual submit does not reset the interval job; still refresh countdown state
   refreshAutoSchedule();
   if(typeof loadGsmPanel==='function') loadGsmPanel();
+}
+async function pollMokuro(){
+  const btn=document.getElementById('btn-mokuro-sync');
+  if(btn) btn.disabled=true;
+  setMsg('Polling Mokuro…');
+  try{
+    const r=await fetch('/api/mokuro/sync',{method:'POST'});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.message||j.detail||r.statusText);
+    if(j.ok===false) throw new Error(j.message||(j.errors&&j.errors[0])||'poll failed');
+    const n=Number(j.logs_created)||0;
+    const msg=j.message||(n?`mokuro: ${n} log(s)`:'mokuro: up to date');
+    setMsg(msg+(j.errors&&j.errors.length?(' · '+j.errors[0]):''));
+    loadQueue();
+    if(typeof refreshMetrics==='function') refreshMetrics();
+  }catch(e){
+    setMsg('mokuro: '+(e.message||String(e)));
+  }finally{
+    if(btn) btn.disabled=false;
+  }
 }
 
 /* ===== GSM → Tadoku (Queue / Home fold) ===== */
@@ -963,7 +1142,7 @@ function gsmShowReadyUI(on){
     const el=document.getElementById(id);
     if(el) el.hidden=!on;
   });
-  ['gsm-submit-btn','gsm-refresh-btn','gsm-mark-btn','gsm-pref-save','gsm-auto-save'].forEach(id=>{
+  ['gsm-submit-btn','gsm-mark-btn','gsm-pref-save','gsm-auto-save'].forEach(id=>{
     const b=document.getElementById(id);
     if(b) b.disabled=!on;
   });
@@ -1977,4 +2156,5 @@ bindFoldOpenPref('gsm-fold', 'immersion.gsm.open');
 bindFoldOpenPref('abs-fold', 'immersion.abs.open');
 bindFoldOpenPref('reading-fold', 'immersion.reading.open');
 bindFoldOpenPref('quick-log-fold', 'immersion.quickLog.open');
+try{ qlApplyTypeFields({applyDefaults:true}); }catch(e){}
 """

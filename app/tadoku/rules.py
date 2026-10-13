@@ -45,6 +45,8 @@ def resolve_tadoku_mode(
         return cfg.youtube.tadoku_default
     if source == "plex":
         return cfg.plex.tadoku_default
+    if source == "jellyfin":
+        return cfg.jellyfin.tadoku_default
     if source == "hoshi":
         hoshi_mode = (getattr(cfg, "hoshi", None) and cfg.hoshi.tadoku_default) or ""
         if str(hoshi_mode).strip():
@@ -71,6 +73,10 @@ def resolve_tadoku_mode(
             return str(mode).strip()
     if source == "asbplayer":
         mode = (getattr(cfg, "asbplayer", None) and cfg.asbplayer.tadoku_default) or ""
+        if str(mode).strip():
+            return str(mode).strip()
+    if source == "mokuro":
+        mode = (getattr(cfg, "mokuro", None) and cfg.mokuro.tadoku_default) or ""
         if str(mode).strip():
             return str(mode).strip()
     return TadokuMode.PENDING.value

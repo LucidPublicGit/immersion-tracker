@@ -47,17 +47,17 @@ def list_recent_pushed(db: Session, limit: int = 30) -> list[LogEntry]:
     """
     Recently submitted logs from local DB only (status=pushed).
 
-    Ordered by immersion timestamp (when the activity happened / when Tadoku
-    recorded it), not updated_at. updated_at is bumped by imports, progress
-    fixups, and edits — so it is a poor "recent" key (old pulled progress
-    logs would float to the top).
+    Ordered by updated_at (when the row became pushed / last touched after
+    submit), not immersion timestamp. Hoshi (and some pulls) backdate
+    ``timestamp`` to the reading day — sorting by that hid fresh submits
+    from the Recent Tadoku list even though they just landed on tadoku.app.
 
     Does not call tadoku.app.
     """
     return (
         db.query(LogEntry)
         .filter(LogEntry.tadoku_status == TadokuStatus.PUSHED.value)
-        .order_by(LogEntry.timestamp.desc(), LogEntry.id.desc())
+        .order_by(LogEntry.updated_at.desc(), LogEntry.id.desc())
         .limit(limit)
         .all()
     )

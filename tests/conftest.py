@@ -77,6 +77,7 @@ def _isolate_runtime_settings(settings) -> None:
     # Keep status expectations stable regardless of local settings.yaml
     settings.yaml_config.youtube.tadoku_default = "pending"
     settings.yaml_config.plex.tadoku_default = "pending"
+    settings.yaml_config.jellyfin.tadoku_default = "pending"
     for key in ("youtube", "anime", "show", "book", "manga"):
         if key in settings.yaml_config.content_type_defaults:
             settings.yaml_config.content_type_defaults[key].tadoku_mode = "pending"

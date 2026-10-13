@@ -276,12 +276,12 @@ button.danger.log-del-btn.is-armed {
 """
 
 LOGS_JS = r"""
-const CONTENT_TYPES = ['anime','show','movie','youtube','book','manga','visual_novel','game','podcast','study'];
+const CONTENT_TYPES = ['anime','show','movie','youtube','book','audiobook','manga','visual_novel','game','podcast','study'];
 const ACTIVITIES = ['listening','reading','writing','speaking','study'];
 const UNITS = ['minutes','minutes_high_density','pages','two_column_pages','comic_pages','characters','sentences'];
 const TADOKU_MODES = ['auto','pending','never'];
 const TADOKU_STATUSES = ['pending','ready','pushed','failed','skipped','n/a'];
-const SOURCES = ['manual','youtube','plex','steam','sheet','other'];
+const SOURCES = ['manual','youtube','plex','jellyfin','steam','sheet','other'];
 
 /* Top filter tabs — Recent is default */
 const LOG_TABS = [
@@ -348,6 +348,20 @@ function bindTabs(){
   });
 }
 
+function mokuroPagesHtml(e){
+  if((e.source||'')!=='mokuro') return `${e.amount} <span class="muted">${escapeHtml(e.unit||'')}</span>`;
+  const notes=String(e.notes||'');
+  const m=notes.match(/pages\s+(\d+)\s*→\s*(\d+)\s*\(\+(\d+)\)/i);
+  const done=/\bcompleted\b/i.test(notes);
+  const logged=Number(e.amount)||(m?Number(m[3]):0);
+  const end=m?Number(m[2]):0;
+  if(done && end>0){
+    const ok=logged>=end;
+    const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';
+    return `<span class="mokuro-pages${ok?' done':''}" title="Logged pages / volume pages (UI only)">${logged}/${end}${check}</span>`;
+  }
+  return `<span class="mokuro-pages" title="Logged pages (volume not marked complete)">${logged} pages</span>`;
+}
 function escapeHtml(s){
   return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -358,10 +372,19 @@ function setMsg(t, kind){
   el.className = 'form-msg' + (kind ? ' ' + kind : '');
 }
 function epLabel(e){
+  const ct=(e.content_type||'').toLowerCase();
   const s=e.season, ep=e.episode;
-  if(s!=null && ep!=null) return `S${String(s).padStart(2,'0')}E${String(ep).padStart(2,'0')}`;
-  if(s!=null) return `S${String(s).padStart(2,'0')}`;
-  if(ep!=null) return `E${String(ep).padStart(2,'0')}`;
+  // Movies are single works — never S00E00 (Plex often sends 0/0).
+  if(ct==='movie'||ct==='film') return '';
+  if((ct==='manga'||ct==='book'||ct==='comic') && ep!=null && (s==null||s===''))
+    return `Vol ${ep}`;
+  const sn=(s===''||s==null)?null:Number(s);
+  const en=(ep===''||ep==null)?null:Number(ep);
+  if(sn===0 && en===0) return '';
+  if(sn!=null && !Number.isNaN(sn) && en!=null && !Number.isNaN(en))
+    return `S${String(sn).padStart(2,'0')}E${String(en).padStart(2,'0')}`;
+  if(sn!=null && !Number.isNaN(sn) && sn!==0) return `S${String(sn).padStart(2,'0')}`;
+  if(en!=null && !Number.isNaN(en) && en!==0) return `E${String(en).padStart(2,'0')}`;
   return '';
 }
 function fmtWhen(ts){
@@ -433,15 +456,16 @@ function renderTable(){
     return;
   }
   tb.innerHTML = rows.map(e=>{
-    const tt = e.tadoku_title || e.title || '';
+    const tt = e.title || e.tadoku_title || '';
     const ep = epLabel(e);
+    const tip = e.tadoku_title && e.tadoku_title!==tt ? e.tadoku_title : tt;
     return `<tr data-id="${e.id}">
       <td class="col-id col-hide-md">${e.id}</td>
       <td class="mono">${escapeHtml(fmtWhen(e.timestamp))}</td>
       <td>${escapeHtml(e.content_type||'')}</td>
-      <td class="col-title" title="${escapeHtml(tt)}">${escapeHtml(tt)}</td>
+      <td class="col-title" title="${escapeHtml(tip)}">${escapeHtml(tt)}</td>
       <td class="ep">${escapeHtml(ep||'—')}</td>
-      <td class="col-amt">${e.amount} <span class="muted">${escapeHtml(e.unit||'')}</span></td>
+      <td class="col-amt">${mokuroPagesHtml(e)}</td>
       <td class="col-hide-sm">${escapeHtml(e.activity||'')}</td>
       <td class="col-hide-sm">${escapeHtml(e.source||'')}</td>
       <td>${statusBadge(e.tadoku_status)}</td>
@@ -788,21 +812,77 @@ async function deleteEdit(){
     setMsg('Delete failed (network)', 'err');
   }
 }
+const LOGS_UNIT_BY_TYPE={
+  anime:'minutes', show:'minutes', movie:'minutes', youtube:'minutes',
+  podcast:'minutes', study:'minutes', game:'minutes',
+  manga:'pages', book:'characters', audiobook:'minutes_high_density',
+  visual_novel:'characters',
+};
+const LOGS_UNIT_LABEL={
+  minutes:'minutes', minutes_high_density:'minutes (dense)',
+  pages:'pages', characters:'characters', sentences:'sentences',
+};
+function logsPosMode(ct){
+  ct=(ct||'').toLowerCase();
+  if(ct==='manga'||ct==='book'||ct==='comic') return 'vol';
+  if(ct==='anime'||ct==='show') return 'se';
+  return 'none'; // audiobook/vn/etc: no position
+}
+function logsUnitFor(ct){
+  return LOGS_UNIT_BY_TYPE[(ct||'').toLowerCase()]||'minutes';
+}
+function logsApplyTypeFields(){
+  const ct=document.getElementById('c-type')?.value||'';
+  const mode=logsPosMode(ct);
+  const unit=logsUnitFor(ct);
+  const amtLab=document.getElementById('c-amount-label');
+  if(amtLab) amtLab.textContent=`Amount (${LOGS_UNIT_LABEL[unit]||unit})`;
+  const label=document.getElementById('c-pos-label');
+  const sEl=document.getElementById('c-season');
+  const eEl=document.getElementById('c-episode');
+  const wrap=document.getElementById('c-pos-fields');
+  if(!wrap) return;
+  if(mode==='none'){
+    wrap.hidden=true;
+    if(label) label.style.display='none';
+    if(sEl) sEl.value='';
+    if(eEl) eEl.value='';
+  }else{
+    wrap.hidden=false;
+    if(label) label.style.display='';
+    if(mode==='vol'){
+      if(label) label.textContent='Volume';
+      if(sEl){ sEl.style.display='none'; sEl.value=''; }
+      if(eEl){ eEl.style.display=''; eEl.placeholder='Vol'; }
+    }else{
+      if(label) label.textContent='Season / Episode';
+      if(sEl){ sEl.style.display=''; sEl.placeholder='S'; }
+      if(eEl){ eEl.style.display=''; eEl.placeholder='E'; }
+    }
+  }
+}
 async function createLog(submit){
   const modeSel = document.getElementById('c-mode').value || null;
+  const content_type = document.getElementById('c-type').value;
+  const pos = logsPosMode(content_type);
+  let season = numOrNull(document.getElementById('c-season').value);
+  let episode = numOrNull(document.getElementById('c-episode').value);
+  if(pos==='none'){ season=null; episode=null; }
+  else if(pos==='vol'){ season=null; }
   const body = {
-    content_type: document.getElementById('c-type').value,
+    content_type,
     title: document.getElementById('c-title').value.trim(),
     amount: Number(document.getElementById('c-amount').value),
-    unit: document.getElementById('c-unit').value || null,
-    activity: document.getElementById('c-activity').value || null,
+    unit: logsUnitFor(content_type),
     series_key: document.getElementById('c-series').value.trim() || null,
-    season: numOrNull(document.getElementById('c-season').value),
-    episode: numOrNull(document.getElementById('c-episode').value),
+    season,
+    episode,
     source: 'manual',
     tadoku_mode: submit ? 'auto' : modeSel,
     notes: document.getElementById('c-notes').value.trim() || null,
   };
+  if(body.season==null) delete body.season;
+  if(body.episode==null) delete body.episode;
   if(!body.title){ setMsg('Title required', 'err'); return; }
   if(!(body.amount > 0)){ setMsg('Amount must be > 0', 'err'); return; }
   setMsg(submit ? 'Logging & submitting…' : 'Creating…');
@@ -830,7 +910,8 @@ async function createLog(submit){
       }
       status = aj.tadoku_status || status;
     }
-    setMsg(`${submit ? 'Submitted' : 'Created'} #${j.id} · ${j.tadoku_title || j.title} · ${status}`, 'ok');
+    const pl = epLabel({content_type, season:j.season, episode:j.episode});
+    setMsg(`${submit ? 'Submitted' : 'Created'} #${j.id} · ${j.title || ''}${pl ? ' · '+pl : ''} · ${status}`, 'ok');
     document.getElementById('c-title').value = '';
     document.getElementById('c-amount').value = '';
     document.getElementById('c-notes').value = '';
@@ -849,6 +930,7 @@ applyUrlParams();
 bindTabs();
 paintTabs();
 bindSortHeaders();
+try{ logsApplyTypeFields(); }catch(e){}
 loadLogs();
 """
 
@@ -872,13 +954,14 @@ def logs_page(*, tautulli: str, tadoku: str, sheets: str, plex: str) -> str:
         f'<option value="{escape(t)}">{escape(t)}</option>'
         for t in (
             "anime",
+            "manga",
+            "book",
+            "audiobook",
+            "visual_novel",
             "show",
             "movie",
-            "youtube",
-            "book",
-            "manga",
-            "visual_novel",
             "game",
+            "youtube",
             "podcast",
             "study",
         )
@@ -894,11 +977,7 @@ def logs_page(*, tautulli: str, tadoku: str, sheets: str, plex: str) -> str:
             "characters",
             "sentences",
         )
-    )
-    activity_opts = "".join(
-        f'<option value="{escape(a)}">{escape(a)}</option>'
-        for a in ("listening", "reading", "writing", "speaking", "study")
-    )
+    )  # edit drawer only
     # Tab strip HTML (Recent default / active)
     tab_btns = []
     for t in (
@@ -960,6 +1039,7 @@ def logs_page(*, tautulli: str, tadoku: str, sheets: str, plex: str) -> str:
         <option value="manual">manual</option>
         <option value="youtube">youtube</option>
         <option value="plex">plex</option>
+        <option value="jellyfin">jellyfin</option>
         <option value="sheet">sheet</option>
         <option value="other">other</option>
       </select>
@@ -991,7 +1071,7 @@ def logs_page(*, tautulli: str, tadoku: str, sheets: str, plex: str) -> str:
           <th data-sort="timestamp">When</th>
           <th data-sort="content_type">Type</th>
           <th data-sort="title">Title</th>
-          <th data-sort="ep">S/E</th>
+          <th data-sort="ep">Pos</th>
           <th data-sort="amount">Amount</th>
           <th data-sort="activity" class="col-hide-sm">Activity</th>
           <th data-sort="source" class="col-hide-sm">Source</th>
@@ -1009,31 +1089,34 @@ def logs_page(*, tautulli: str, tadoku: str, sheets: str, plex: str) -> str:
     <summary>Add manual log</summary>
     <div class="help-body">
       <div class="logs-create card-form" style="border:0;margin:0;padding:0">
-        <p class="field-hint" style="margin-top:0">Full create form. Faster one-shot: FAB (+) or Inbox Quick log. Identity-normalizes titles (yanineko → ヤニねこ).</p>
+        <p class="field-hint" style="margin-top:0">Activity is inferred from type. Faster path: FAB (+) or Inbox Quick log.</p>
         <div class="row">
           <div>
+            <label for="c-type">Type</label>
+            <select id="c-type" onchange="logsApplyTypeFields()">{type_opts}</select>
+          </div>
+          <div style="flex:1 1 14rem">
             <label for="c-title">Title</label>
             <input id="c-title" placeholder="Work or show name" autocomplete="off"/>
           </div>
-          <div>
-            <label for="c-type">Content type</label>
-            <select id="c-type">{type_opts}</select>
-          </div>
         </div>
         <div class="row">
           <div>
-            <label for="c-amount">Amount</label>
+            <label id="c-amount-label" for="c-amount">Amount</label>
             <input id="c-amount" type="number" step="any" min="0" placeholder="e.g. 24"/>
           </div>
           <div>
-            <label for="c-unit">Unit</label>
-            <select id="c-unit">{unit_opts}</select>
+            <label id="c-pos-label" for="c-episode">Season / Episode</label>
+            <div id="c-pos-fields" style="display:flex;gap:0.4rem">
+              <input id="c-season" type="number" step="1" placeholder="S" style="flex:1"/>
+              <input id="c-episode" type="number" step="1" placeholder="E" style="flex:1"/>
+            </div>
           </div>
         </div>
         <div class="row">
           <div>
-            <label for="c-activity">Activity</label>
-            <select id="c-activity">{activity_opts}</select>
+            <label for="c-series">Series key <span class="faint">(optional)</span></label>
+            <input id="c-series" placeholder="book:kokoro" autocomplete="off"/>
           </div>
           <div>
             <label for="c-mode">Tadoku mode</label>
@@ -1043,19 +1126,6 @@ def logs_page(*, tautulli: str, tadoku: str, sheets: str, plex: str) -> str:
               <option value="pending">pending</option>
               <option value="never">never</option>
             </select>
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label for="c-series">Series key <span class="faint">(optional)</span></label>
-            <input id="c-series" placeholder="book:kokoro" autocomplete="off"/>
-          </div>
-          <div>
-            <label for="c-season">Season / Episode</label>
-            <div style="display:flex;gap:0.4rem">
-              <input id="c-season" type="number" step="1" placeholder="S" style="flex:1"/>
-              <input id="c-episode" type="number" step="1" placeholder="E" style="flex:1"/>
-            </div>
           </div>
         </div>
         <label for="c-notes">Notes</label>

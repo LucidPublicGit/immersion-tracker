@@ -62,17 +62,27 @@ def type_tab_filter_formula(logs_title: str, content_type: str) -> str:
 def tadoku_title_array_expr(logs_title: str) -> str:
     """
     ARRAYFORMULA expression matching app.media.title_format.tadoku_title
-    (title + optional SxxExx), relative to Logs sheet columns D/E/F.
+    (title only for movie/film; Vol N for manga/book; else optional SxxExx).
+    Logs columns: C=content_type D=title E=season F=episode.
     """
     src = escape_sheet_title(logs_title)
-    # D=title E=season F=episode
+    ct = f"LOWER({src}!C2:C)"
+    # season/episode 0 (Plex movies) must not become S00E00
+    se_ok = (
+        f'(({src}!E2:E<>"")*({src}!E2:E<>0)*({src}!F2:F<>"")*({src}!F2:F<>0))'
+    )
+    s_ok = f'(({src}!E2:E<>"")*({src}!E2:E<>0))'
+    e_ok = f'(({src}!F2:F<>"")*({src}!F2:F<>0))'
     return (
         f'IF({src}!D2:D="","",'
+        f'IF(({ct}="movie")+({ct}="film"),{src}!D2:D,'
+        f'IF(({ct}="manga")+({ct}="book")+({ct}="comic"),'
+        f'IF({src}!F2:F<>"",{src}!D2:D&" Vol "&{src}!F2:F,{src}!D2:D),'
         f'{src}!D2:D&'
-        f'IF(({src}!E2:E<>"")*({src}!F2:F<>""),'
+        f'IF({se_ok},'
         f'" S"&TEXT({src}!E2:E,"00")&"E"&TEXT({src}!F2:F,"00"),'
-        f'IF({src}!E2:E<>""," S"&TEXT({src}!E2:E,"00"),'
-        f'IF({src}!F2:F<>""," E"&TEXT({src}!F2:F,"00"),""))))'
+        f'IF({s_ok}," S"&TEXT({src}!E2:E,"00"),'
+        f'IF({e_ok}," E"&TEXT({src}!F2:F,"00"),""))))))'
     )
 
 

@@ -98,6 +98,7 @@ Everything under this line is documentation for integrations and internals — *
 | Manual logs | API, Queue UI, or Google Sheet “Manual Entry” tab |
 | YouTube | Browser extension logs when **≥90%** watched **and** ≥5 min progress; each video once ever |
 | Plex / Tautulli | Webhooks when progress ≥90% or marked watched |
+| Jellyfin | Webhook plugin PlaybackStop (≥90% or played) ([docs/JELLYFIN.md](docs/JELLYFIN.md)) |
 | Hoshi (Boox) | ADB pull of `statistics.json` (host script for USB) or Drive poll → character deltas ([docs/HOSHI.md](docs/HOSHI.md)) |
 | GameSentenceMiner | Local SQLite line counts → VN/game characters ([GSM](config/settings.example.yaml)) |
 | Steam | Playtime deltas for allowlisted apps ([docs/STEAM.md](docs/STEAM.md)) |
@@ -105,6 +106,7 @@ Everything under this line is documentation for integrations and internals — *
 | Spotify | Recently played podcasts (allowlisted shows) ([docs/SPOTIFY.md](docs/SPOTIFY.md)) |
 | mpv | Watch history / lua webhook → anime minutes ([docs/MPV.md](docs/MPV.md)) |
 | asbplayer | Webhook / userscript when video finishes ([docs/ASBPLAYER.md](docs/ASBPLAYER.md)) |
+| Mokuro Reader | Google Drive `mokuro-reader/volume-data.json` → manga page deltas (Tadoku pending) |
 | Tadoku queue | Hybrid rules: auto-export, review-then-push, or never |
 | Google Sheets | Optional dashboard + manual entry + catalog overrides |
 | Deploy | Docker Compose (or run FastAPI locally) |
@@ -121,14 +123,15 @@ Everything under this line is documentation for integrations and internals — *
 6. [Configuration](#configuration)
 7. [YouTube extension](#youtube-extension)
 8. [Plex / Tautulli](#plex--tautulli)
-9. [Manual logging](#manual-logging)
-10. [Tadoku queue](#tadoku-queue)
-11. [Google Sheets](#google-sheets)
-12. [API reference](#api-reference)
-13. [Data & files](#data--files)
-14. [Tests](#tests)
-15. [Troubleshooting](#troubleshooting)
-16. [Roadmap / limits](#roadmap--limits)
+9. [Jellyfin](#jellyfin)
+10. [Manual logging](#manual-logging)
+11. [Tadoku queue](#tadoku-queue)
+12. [Google Sheets](#google-sheets)
+13. [API reference](#api-reference)
+14. [Data & files](#data--files)
+15. [Tests](#tests)
+16. [Troubleshooting](#troubleshooting)
+17. [Roadmap / limits](#roadmap--limits)
 
 ---
 
@@ -137,9 +140,10 @@ Everything under this line is documentation for integrations and internals — *
 ```
 YouTube extension ──┐
 Plex / Tautulli ────┤
+Jellyfin webhook ───┤
 Hoshi ADB / Drive ──┤
 GSM (local SQLite) ─┼──► FastAPI ──► SQLite (source of truth)
-Steam / Anki / Spotify / mpv / asbplayer
+Steam / Anki / Spotify / mpv / asbplayer / Mokuro
 Manual API / Sheet ─┘       ├──► Tadoku queue (pending / ready / pushed)
                             ├──► data/tadoku_export/*.json  (export “push”)
                             └──► Google Sheets (optional sync)
@@ -159,7 +163,7 @@ SQLite is the source of truth. Sheets is a human-friendly view and input surface
 
 - **Docker Desktop** (or Docker Engine + Compose), **or** Python **3.12–3.13**
 - **Firefox 121+** (recommended) or Chrome / Edge (for the YouTube extension)
-- Optional: Plex or Tautulli on the same LAN
+- Optional: Plex/Tautulli or Jellyfin (Webhook plugin) on the same LAN
 - Optional: Google Cloud service account for Sheets
 
 > **Note:** Python 3.14 may fail to install pinned deps (pydantic). Prefer 3.13.
@@ -211,6 +215,22 @@ docker compose --profile plex up -d
 | `./config` | `/app/config` | `settings.yaml` you edit on the PC |
 
 Default port: **8000**.
+
+### Tailscale (optional)
+
+Sidecar publishes HTTPS on your tailnet only (not Funnel / not the public internet).
+
+1. Admin console: enable **MagicDNS** + **HTTPS certificates**.
+2. In `.env`:
+   ```
+   COMPOSE_PROFILES=tailscale
+   TS_AUTHKEY=tskey-auth-...   # or omit and open the login URL in `docker compose logs tailscale`
+   UI_PASSWORD=...             # UI is otherwise open
+   ```
+   Auth key: https://login.tailscale.com/admin/settings/keys — reusable, **not** ephemeral.
+3. `docker compose up -d` (or `rebuild.ps1`). Then `https://immersion-tracker.<tailnet>.ts.net`.
+
+State lives in `data/tailscale/` (kept across rebuilds).
 
 ### Google Sheets — important (not a local Excel file)
 
@@ -601,6 +621,19 @@ Default Tadoku mode for Plex-mapped anime/shows: **`pending`** (review before ex
 
 ---
 
+## Jellyfin
+
+Same as Plex, via the [Jellyfin Webhook plugin](https://github.com/jellyfin/jellyfin-plugin-webhook) (Playback Stop).
+Full setup: [docs/JELLYFIN.md](docs/JELLYFIN.md).
+
+| Endpoint | Use |
+|----------|-----|
+| `POST /api/webhooks/jellyfin` | Plugin JSON or normalized watch body |
+
+Accepted when `PlayedToCompletion` / `Played` **or** progress ≥ `jellyfin.watch_threshold`.
+
+---
+
 ## Manual logging
 
 ### API
@@ -759,6 +792,7 @@ Base path: `/api` (OpenAPI: `/docs`).
 | POST | `/webhooks/youtube` | Extension / YT complete |
 | POST | `/webhooks/plex` | Plex payload |
 | POST | `/webhooks/tautulli` | Tautulli payload |
+| POST | `/webhooks/jellyfin` | Jellyfin webhook plugin |
 | GET/POST | `/catalog` | List / create catalog |
 | PATCH | `/catalog/{series_key}` | Update override |
 | POST | `/sync/sheets` | Force sheet sync |
@@ -853,7 +887,7 @@ docker compose logs -f immersion-tracker
 
 **Working now**
 
-- Manual + YouTube (90%) + Plex/Tautulli ingest  
+- Manual + YouTube (90%) + Plex/Tautulli + Jellyfin ingest
 - Hoshi (Boox) + GameSentenceMiner  
 - Steam playtime deltas, AnkiConnect study time, Spotify podcasts  
 - mpv history/webhook + asbplayer webhook  
@@ -883,5 +917,6 @@ docker compose logs -f immersion-tracker
 - [ ] Optional YouTube: load `extension/`; paste `data/extension-connect.txt` → **Test server**
 - [ ] Optional: Plex via `.\setup.ps1 -WithPlex` / Sheets via `sheets-init.ps1`
 - [ ] Use `/queue` to approve pending items and process READY exports
+- [ ] Optional Jellyfin: configure the webhook and library map in [docs/JELLYFIN.md](docs/JELLYFIN.md)
 
 Happy immersion.

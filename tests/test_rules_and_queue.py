@@ -125,8 +125,8 @@ def test_recent_tadoku_logs_local_only(client, tmp_path, monkeypatch):
     assert "Recent Show" in (row.get("tadoku_title") or row["title"])
 
 
-def test_recent_tadoku_logs_order_by_timestamp(client, tmp_path, monkeypatch):
-    """Recent list is by immersion timestamp, not updated_at (progress imports)."""
+def test_recent_tadoku_logs_order_by_submit_time(client, tmp_path, monkeypatch):
+    """Recent list is by updated_at (submit time), so backdated Hoshi still ranks first."""
     from datetime import datetime, timedelta, timezone
 
     from sqlalchemy.orm import sessionmaker
@@ -142,58 +142,55 @@ def test_recent_tadoku_logs_order_by_timestamp(client, tmp_path, monkeypatch):
         lambda: TadokuClient(export_dir=str(export), dry_run=True),
     )
 
-    # Fresh approve → recent immersion
-    fresh = client.post(
+    # Older approve (earlier updated_at)
+    older = client.post(
         "/api/logs",
         json={
             "content_type": "anime",
-            "title": "Fresh Show",
+            "title": "Older Show",
             "amount": 24,
-            "series_key": "anime:fresh-show",
+            "series_key": "anime:older-show",
             "season": 1,
             "episode": 1,
         },
     ).json()
-    client.post(f"/api/logs/{fresh['id']}/approve")
+    client.post(f"/api/logs/{older['id']}/approve")
 
-    # Simulate a progress-import: old timestamp, but updated_at just now
+    # Hoshi-style: immersion day weeks ago, but just submitted (updated_at now+1h)
     old_ts = datetime(2020, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
     SessionLocal = sessionmaker(bind=get_engine(), autoflush=False, autocommit=False)
     db = SessionLocal()
     try:
-        old = LogEntry(
-            content_type="anime",
-            title="Ancient Progress Import",
-            amount=24,
-            unit="minutes",
-            source="tadoku",
-            source_ref="tadoku:import-old-1",
-            series_key="anime:ancient",
-            activity="listening",
-            tadoku_mode="never",
+        hoshi = LogEntry(
+            content_type="book",
+            title="Hoshi Backdated",
+            amount=2000,
+            unit="characters",
+            source="hoshi",
+            source_ref="hoshi:combined:1",
+            series_key="book:hoshi-backdated",
+            activity="reading",
+            tadoku_mode="pending",
             tadoku_status=TadokuStatus.PUSHED.value,
-            tadoku_remote_id="import-old-1",
-            tadoku_score_estimate=1.0,
+            tadoku_remote_id="hoshi-remote-1",
+            tadoku_score_estimate=5.0,
             timestamp=old_ts,
             created_at=utcnow(),
-            updated_at=utcnow() + timedelta(hours=1),  # newer than fresh submit
+            updated_at=utcnow() + timedelta(hours=1),
         )
-        db.add(old)
+        db.add(hoshi)
         db.commit()
-        db.refresh(old)
-        old_id = old.id
+        db.refresh(hoshi)
+        hoshi_id = hoshi.id
     finally:
         db.close()
 
     recent = client.get("/api/tadoku/recent?limit=20").json()
     ids = [row["id"] for row in recent]
-    assert fresh["id"] in ids
-    assert old_id in ids
-    # Fresh immersion must rank above the old imported log
-    assert ids.index(fresh["id"]) < ids.index(old_id)
-    # Strict timestamp order among these two
-    by_id = {row["id"]: row for row in recent}
-    assert by_id[fresh["id"]]["timestamp"] > by_id[old_id]["timestamp"]
+    assert older["id"] in ids
+    assert hoshi_id in ids
+    # Just-submitted backdated row ranks above older submit
+    assert ids.index(hoshi_id) < ids.index(older["id"])
 
 
 def test_metrics(client):

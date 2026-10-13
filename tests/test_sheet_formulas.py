@@ -41,8 +41,9 @@ def test_queue_filter_actionable_statuses():
     assert "pending" in f
     assert "ready" in f
     assert "failed" in f
-    # tadoku_title uses season/episode columns E/F
+    # tadoku_title uses season/episode columns E/F; movies stay title-only
     assert "TEXT" in f
+    assert '"movie"' in f or "movie" in f
 
 
 def test_metrics_formulas_reference_logs():

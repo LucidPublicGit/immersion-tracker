@@ -337,6 +337,16 @@ def job_abs_daily_time_export() -> None:
         db.close()
 
 
+def job_weekly_db_backup() -> None:
+    """Sunday snapshot of immersion.db → data/backups/ (last 4 weeks)."""
+    try:
+        from app.db.backup import run_weekly_db_backup
+
+        run_weekly_db_backup(get_settings().sqlite_file_path(), keep=4)
+    except Exception:
+        logger.exception("weekly db backup failed")
+
+
 def start_scheduler() -> BackgroundScheduler | None:
     global _scheduler
     settings = get_settings()
@@ -539,6 +549,30 @@ def start_scheduler() -> BackgroundScheduler | None:
             "tadoku upstream monitor: every %sh (minimal GET canaries)",
             hours,
         )
+
+    # Weekly SQLite snapshot under data/backups/ (retain last 4)
+    from app.db.backup import list_weekly_backups, weekly_backup_dir
+
+    db_path = settings.sqlite_file_path()
+    backup_kw: dict = {}
+    if db_path is not None:
+        existing = list_weekly_backups(weekly_backup_dir(db_path))
+        if not existing:
+            # First boot: snapshot once; then Sundays 04:00 container local time
+            backup_kw["next_run_time"] = datetime.now(timezone.utc)
+    _scheduler.add_job(
+        job_weekly_db_backup,
+        "cron",
+        day_of_week="sun",
+        hour=4,
+        minute=0,
+        id="db_weekly_backup",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=12 * 3600,
+        **backup_kw,
+    )
+    logger.info("weekly db backup: Sundays 04:00 (retain 4)")
 
     _scheduler.start()
     logger.info("scheduler started")

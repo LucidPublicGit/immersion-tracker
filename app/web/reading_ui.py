@@ -407,7 +407,10 @@ async function logToTadoku(id, btn){
 }
 
 async function pollHoshi(){
+  const btn = document.getElementById('btn-poll');
+  if(btn) btn.disabled = true;
   setReadingMsg('Syncing Hoshi…');
+  if(typeof setMsg==='function') setMsg('Syncing Hoshi…');
   try{
     const r = await fetch('/api/hoshi/sync', {method:'POST'});
     const data = await r.json().catch(()=>({}));
@@ -415,10 +418,15 @@ async function pollHoshi(){
     const parts = [];
     if(data.chars_bucketed) parts.push(`+${fmtChars(data.chars_bucketed)} new`);
     if(data.skipped_reread) parts.push('re-reads ignored');
-    setReadingMsg(parts.length ? parts.join(' · ') : (data.reason || 'Up to date'), data.ok===false?'err':'ok');
+    const msg = parts.length ? parts.join(' · ') : (data.reason || 'Up to date');
+    setReadingMsg(msg, data.ok===false?'err':'ok');
+    if(typeof setMsg==='function') setMsg('hoshi: '+msg);
     await loadReading();
   }catch(e){
     setReadingMsg(String(e.message||e), 'err');
+    if(typeof setMsg==='function') setMsg('hoshi: '+(e.message||e));
+  }finally{
+    if(btn) btn.disabled = false;
   }
 }
 
@@ -479,7 +487,7 @@ def reading_panel_html(*, compact: bool = False) -> str:
     return f"""
 {help_html}
   <div class="reading-toolbar">
-    <button type="button" class="primary" id="btn-poll">Sync Hoshi</button>
+    {"" if compact else '<button type="button" class="primary" id="btn-poll">Sync Hoshi</button>'}
     <button type="button" class="secondary" id="btn-log-all">Log all to Tadoku</button>
     <button type="button" class="secondary" id="btn-refresh">Refresh</button>
     {"<a class='chip' href='/reading'>Full page</a>" if compact else ""}

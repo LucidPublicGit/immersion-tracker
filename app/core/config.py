@@ -45,6 +45,21 @@ class PlexConfig(BaseModel):
     tadoku_default: str = "pending"
 
 
+class JellyfinConfig(BaseModel):
+    """Jellyfin Webhook plugin → same watch-threshold ingest as Plex/Tautulli."""
+
+    watch_threshold: float = 0.90
+    library_map: dict[str, str] = Field(
+        default_factory=lambda: {
+            "Anime": "anime",
+            "Movies": "show",
+            "TV Shows": "show",
+        }
+    )
+    library_language: dict[str, str] = Field(default_factory=dict)
+    tadoku_default: str = "pending"
+
+
 class ProgressConfig(BaseModel):
     """Progress / library shelf rules."""
 
@@ -137,6 +152,22 @@ class HoshiConfig(BaseModel):
     auto_submit_idle_minutes: float = 30.0
     # Optional tadoku mode override for hoshi source (empty = content_type default)
     tadoku_default: str = ""
+
+
+class MokuroConfig(BaseModel):
+    """Mokuro Reader Google Drive progress → manga page logs (Tadoku pending)."""
+
+    enabled: bool = False
+    root_folder_name: str = "mokuro-reader"
+    root_folder_id: str = ""
+    poll_seconds: int = 300
+    content_type: str = "manga"
+    unit: str = "comic_pages"
+    activity: str = "reading"
+    min_pages: int = 1
+    # First sight of a volume: false = baseline only (don't dump library history)
+    bootstrap: bool = False
+    tadoku_default: str = "pending"
 
 
 class GsmConfig(BaseModel):
@@ -418,7 +449,9 @@ class AppYamlConfig(BaseModel):
     language_default: str = "ja"
     youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
     plex: PlexConfig = Field(default_factory=PlexConfig)
+    jellyfin: JellyfinConfig = Field(default_factory=JellyfinConfig)
     hoshi: HoshiConfig = Field(default_factory=HoshiConfig)
+    mokuro: MokuroConfig = Field(default_factory=MokuroConfig)
     gsm: GsmConfig = Field(default_factory=GsmConfig)
     audiobookshelf: AudiobookshelfConfig = Field(default_factory=AudiobookshelfConfig)
     steam: SteamConfig = Field(default_factory=SteamConfig)
@@ -440,6 +473,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:////app/data/immersion.db"
     config_path: str = "/app/config/settings.yaml"
     webhook_secret: str = ""
+    jellyfin_url: str = ""
+    jellyfin_api_key: str = ""
     # Optional HTTP Basic Auth for HTML + most API (empty = off).
     # Webhooks + /api/youtube/* stay on WEBHOOK_SECRET only.
     ui_username: str = "admin"

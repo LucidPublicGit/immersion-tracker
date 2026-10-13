@@ -9,6 +9,8 @@ services:
       DATABASE_URL: sqlite:////app/data/immersion.db
       CONFIG_PATH: /app/config/settings.yaml
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-changeme}
+      JELLYFIN_URL: ${JELLYFIN_URL:-}
+      JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
       UI_USERNAME: ${UI_USERNAME:-admin}
       UI_PASSWORD: ${UI_PASSWORD:-}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
@@ -68,6 +70,30 @@ services:
       - ./data/tautulli:/config
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - immersion-tracker
+
+  # Optional: https://immersion-tracker.<tailnet>.ts.net → this app (tailnet only, not Funnel).
+  # Enable: COMPOSE_PROFILES=tailscale in .env. Auth: TS_AUTHKEY or login URL in container logs.
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: immersion-tracker-tailscale
+    hostname: ${TS_HOSTNAME:-immersion-tracker}
+    profiles: ["tailscale"]
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_AUTH_ONCE: "true"
+      TS_HOSTNAME: ${TS_HOSTNAME:-immersion-tracker}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "true"
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      - ./config/tailscale:/config
+    cap_add:
+      - net_admin
+      - net_raw
     restart: unless-stopped
     depends_on:
       - immersion-tracker

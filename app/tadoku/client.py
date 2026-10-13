@@ -30,6 +30,7 @@ CONTENT_TYPE_TAGS = {
     "book": "book",
     "manga": "manga",
     "anime": "anime",
+    "movie": "movie",
     "audiobook": "audiobook",
     "visual_novel": "vn",
     "vn": "vn",
@@ -42,7 +43,42 @@ CONTENT_TYPE_TAGS = {
     "netflix": "show",
 }
 
+# Tadoku expects ISO-639-3 language codes (jpn, eng, …).
+_LANG_TO_ISO3 = {
+    "ja": "jpn",
+    "jp": "jpn",
+    "jpn": "jpn",
+    "japanese": "jpn",
+    "en": "eng",
+    "eng": "eng",
+    "english": "eng",
+    "en-us": "eng",
+    "en-gb": "eng",
+    "ko": "kor",
+    "kor": "kor",
+    "korean": "kor",
+    "zh": "zho",
+    "zho": "zho",
+    "chinese": "zho",
+    "zh-cn": "zho",
+    "zh-tw": "zho",
+}
+
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def normalize_tadoku_language(code: str | None, *, default: str = "jpn") -> str:
+    """Map common 2-letter / name codes to ISO-639-3 for tadoku.app."""
+    raw = (code or "").strip()
+    if not raw:
+        return default or "jpn"
+    key = raw.lower().replace("_", "-")
+    if key in _LANG_TO_ISO3:
+        return _LANG_TO_ISO3[key]
+    # already 3-letter-ish
+    if len(key) == 3 and key.isalpha():
+        return key
+    return raw
 
 
 def live_submit_blocked() -> bool:
@@ -133,7 +169,10 @@ class TadokuClient:
 
     def to_local_payload(self, entry: LogEntry) -> dict:
         display = tadoku_title(
-            entry.title, season=entry.season, episode=entry.episode
+            entry.title,
+            season=entry.season,
+            episode=entry.episode,
+            content_type=entry.content_type,
         )
         contest = self.cfg.contest
         return {
@@ -230,7 +269,10 @@ class TadokuClient:
     def _description_for(self, entry: LogEntry) -> str:
         """Tadoku log description (title + SxxExx). YouTube: TITLE LINK."""
         description = tadoku_title(
-            entry.title, season=entry.season, episode=entry.episode
+            entry.title,
+            season=entry.season,
+            episode=entry.episode,
+            content_type=entry.content_type,
         )
         if not description.strip():
             description = entry.title or "immersion log"
@@ -270,16 +312,17 @@ class TadokuClient:
         # Config override
         overrides = self.cfg.unit_ids or {}
         unit_name = (entry.unit or "minutes").lower().replace("_", " ").strip()
-        # normalize comic_pages etc. → names used by tadoku.app
+        # normalize local unit names → tadoku.app unit names
+        # comic_pages removed upstream: map to page (manga tag carries medium)
         aliases = {
             "minutes": "minute",
             "minute": "minute",
             "min": "minute",
             "pages": "page",
             "page": "page",
-            "comic pages": "comic page",
-            "comic_pages": "comic page",
-            "comic page": "comic page",
+            "comic pages": "page",
+            "comic_pages": "page",
+            "comic page": "page",
             "characters": "character",
             "character": "character",
             "chars": "character",
@@ -309,10 +352,10 @@ class TadokuClient:
 
     def _api_body(self, entry: LogEntry, client: httpx.Client) -> dict[str, Any]:
         activity_id = self._activity_id(entry)
-        lang = (entry.language or self.cfg.language_code or "jpn").strip()
-        # ISO-639-3: ja -> jpn
-        if lang == "ja":
-            lang = "jpn"
+        lang = normalize_tadoku_language(
+            entry.language or self.cfg.language_code or "jpn",
+            default=(self.cfg.language_code or "jpn"),
+        )
 
         # Always put season/episode into description (Tadoku has no separate fields)
         body: dict[str, Any] = {
@@ -465,7 +508,18 @@ class TadokuClient:
                 return False, None, err
 
         if r.status_code != 200:
-            err = f"HTTP {r.status_code}: {r.text[:500]}"
+            body_txt = (r.text or "").strip()
+            if not body_txt:
+                # Empty 400s are common; spell out what we sent so Inbox can show it.
+                body_txt = (
+                    f"(empty response) language_code={body.get('language_code')!r} "
+                    f"description={str(body.get('description') or '')[:100]!r} "
+                    f"tags={body.get('tags')!r} "
+                    f"amount={body.get('amount')!r} unit_id={body.get('unit_id')!r}"
+                )
+            else:
+                body_txt = body_txt[:500]
+            err = f"HTTP {r.status_code}: {body_txt}"
             self._write_export(entry, {"error": err, "request": body})
             return False, None, err
         data = r.json()

@@ -35,6 +35,7 @@ SHARED_CSS = """
   --blue-bg: #dbeafe;
   /* external tool brand (icon tints only) */
   --plex: #e5a00d;
+  --jellyfin: #00a4dc;
   --tautulli: #cc7b19;
   --sheets: #0F9D58;
   --youtube: #ff0000;
@@ -365,6 +366,7 @@ code {
 .tool-btn .ico svg { width: 16px; height: 16px; display: block; }
 .tool-btn .tool-label { }
 .tool-btn.plex .ico { color: #1a1a1a; background: var(--plex); border-radius: 3px; padding: 1px; }
+.tool-btn.jellyfin .ico { color: var(--jellyfin); }
 .tool-btn.tautulli .ico { color: var(--tautulli); }
 .tool-btn.sheets .ico { color: var(--sheets); }
 .tool-btn.tadoku .ico { color: var(--tadoku); }
@@ -949,6 +951,17 @@ button.heat-cell {
   line-height: 1.15;
   text-wrap: balance;
 }
+.inbox-sync-bar {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+#gsm-refresh-btn.gsm-busy {
+  opacity: 0.75;
+  cursor: wait;
+}
 .mast .meta {
   font-size: var(--text-xs);
   color: var(--muted);
@@ -1077,6 +1090,9 @@ button.heat-cell {
   font-family: var(--mono);
   min-height: 1.1em;
   flex: 1;
+  white-space: normal;
+  line-height: 1.35;
+  max-width: min(48rem, 100%);
 }
 .fold-toolbar .links {
   font-size: 0.78rem;
@@ -1951,10 +1967,6 @@ button.heat-cell {
     text-align: left;
   }
 }
-.fold-gsm #gsm-refresh-btn.gsm-busy {
-  opacity: 0.75;
-  cursor: wait;
-}
 .fold-gsm .gsm-stats.gsm-flash {
   animation: gsm-flash 0.7s ease;
 }
@@ -2322,6 +2334,7 @@ th {
 }
 .tool-tile .ico svg { width: 16px; height: 16px; }
 .tool-tile.plex .ico { background: var(--plex); border-color: #b87e08; color: #111; }
+.tool-tile.jellyfin .ico { color: var(--jellyfin); }
 .tool-tile.tautulli .ico { color: var(--tautulli); }
 .tool-tile.sheets .ico { color: var(--sheets); }
 .tool-tile.tadoku .ico { color: var(--tadoku); }
@@ -2402,7 +2415,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; }
 @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
 
-/* Quick log catalog typeahead */
+/* Quick log form */
+.ql-form .ql-type-field { flex: 0 1 10rem; min-width: 8rem; }
+.ql-form .ql-amount-field { flex: 0 1 9rem; min-width: 7rem; }
+.ql-form .ql-pos-field { flex: 1 1 10rem; min-width: 8rem; }
+.ql-form .ql-pos-inputs { display: flex; gap: 0.4rem; }
+.ql-form .ql-pos-inputs input { flex: 1; min-width: 0; }
 .ql-suggest {
   position: absolute;
   z-index: 40;
@@ -2585,6 +2603,41 @@ table.catalog-table th .sort-ind {
 .status-select.status-pending { background: var(--amber-bg); border-color: #d4b86a; }
 .status-select.status-ready { background: var(--blue-bg); border-color: #8aadc8; }
 .status-select.status-failed { background: var(--red-bg); border-color: #d4a09a; }
+.mokuro-pages {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.mokuro-pages.done {
+  color: var(--green);
+  font-weight: 700;
+}
+.mokuro-ok {
+  font-weight: 800;
+  color: var(--green);
+}
+.queue-table tr.row-failed td {
+  background: color-mix(in srgb, var(--red-bg, #f8e8e6) 55%, transparent);
+}
+.queue-table .q-fail {
+  display: block;
+  margin-top: 0.25rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--danger, #a33);
+  line-height: 1.35;
+  white-space: normal;
+  max-width: 28rem;
+}
+.row-config-body .q-fail-detail {
+  margin: 0.35rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--danger, #a33);
+  line-height: 1.35;
+  white-space: normal;
+}
 .status-select.status-pushed { background: var(--green-bg); border-color: #8fbf95; }
 .queue-table .col-status,
 .queue-table .col-mode { white-space: nowrap; }
@@ -2963,6 +3016,7 @@ def nav_html(
     tadoku: str = "https://tadoku.app",
     sheets: str = "",
     plex: str = "http://127.0.0.1:32400/web",
+    jellyfin: str = "http://127.0.0.1:8096",
 ) -> str:
     def cls(name: str) -> str:
         return ' class="active"' if active == name else ""
@@ -3019,6 +3073,9 @@ def nav_html(
     <a class="tool-btn plex" href="{plex}" target="_blank" rel="noopener" title="Plex Web">
       <span class="ico">{icon("plex")}</span><span class="tool-label">Plex</span>
     </a>
+    <a class="tool-btn jellyfin" href="{jellyfin}" target="_blank" rel="noopener" title="Jellyfin">
+      <span class="ico">{icon("jellyfin")}</span><span class="tool-label">Jellyfin</span>
+    </a>
     <a class="tool-btn tautulli" href="{tautulli}" target="_blank" rel="noopener" title="Tautulli">
       <span class="ico">{icon("tautulli")}</span><span class="tool-label">Tautulli</span>
     </a>
@@ -3039,33 +3096,26 @@ def nav_html(
     <button type="button" class="secondary" id="fab-ql-close" aria-label="Close">×</button>
   </div>
   <div class="fab-log-body">
+    <label>Type
+      <select id="fab-ql-type">
+        <option value="anime">Anime</option>
+        <option value="manga">Manga</option>
+        <option value="book">Book</option>
+        <option value="audiobook">Audiobook</option>
+        <option value="visual_novel">VN</option>
+        <option value="show">Show</option>
+        <option value="movie">Movie</option>
+        <option value="game">Game</option>
+        <option value="youtube">YouTube</option>
+        <option value="podcast">Podcast</option>
+        <option value="study">Study</option>
+      </select>
+    </label>
     <label>Title
       <input id="fab-ql-title" type="text" autocomplete="off" placeholder="Work title"/>
     </label>
-    <label>Type
-      <select id="fab-ql-type">
-        <option value="anime">anime</option>
-        <option value="show">show</option>
-        <option value="book">book</option>
-        <option value="manga">manga</option>
-        <option value="visual_novel">visual_novel</option>
-        <option value="youtube">youtube</option>
-        <option value="podcast">podcast</option>
-        <option value="game">game</option>
-        <option value="study">study</option>
-      </select>
-    </label>
-    <label>Amount
+    <label id="fab-ql-amount-wrap">Amount
       <input id="fab-ql-amount" type="number" step="any" min="0" placeholder="24"/>
-    </label>
-    <label>Unit
-      <select id="fab-ql-unit">
-        <option value="minutes">minutes</option>
-        <option value="characters">characters</option>
-        <option value="pages">pages</option>
-        <option value="comic_pages">comic_pages</option>
-        <option value="sentences">sentences</option>
-      </select>
     </label>
     <div class="fab-log-actions">
       <button type="button" class="primary" id="fab-ql-submit">Log &amp; submit</button>
@@ -3189,12 +3239,26 @@ def nav_html(
     const titleEl = document.getElementById('fab-ql-title');
     const typeEl = document.getElementById('fab-ql-type');
     const amountEl = document.getElementById('fab-ql-amount');
-    const unitEl = document.getElementById('fab-ql-unit');
+    const amountWrap = document.getElementById('fab-ql-amount-wrap');
     const UNIT_BY_TYPE = {{
-      book: 'characters', manga: 'characters', visual_novel: 'characters',
+      book: 'characters', manga: 'pages', visual_novel: 'characters',
       anime: 'minutes', show: 'minutes', movie: 'minutes', youtube: 'minutes',
-      podcast: 'minutes', game: 'minutes', study: 'minutes', audiobook: 'minutes_high_density'
+      podcast: 'minutes', game: 'minutes', study: 'minutes',
+      audiobook: 'minutes_high_density'
     }};
+    const UNIT_LABEL = {{
+      minutes: 'minutes', minutes_high_density: 'minutes (dense)',
+      pages: 'pages', characters: 'characters'
+    }};
+    function fabSyncAmountLabel() {{
+      const ct = (typeEl && typeEl.value) || 'anime';
+      const u = UNIT_BY_TYPE[ct] || 'minutes';
+      if (amountWrap) {{
+        const input = amountWrap.querySelector('input');
+        amountWrap.textContent = 'Amount (' + (UNIT_LABEL[u] || u) + ')';
+        if (input) amountWrap.appendChild(input);
+      }}
+    }}
     function openFab() {{
       /* Prefer full quick-log fold on inbox/home when present */
       const fold = document.getElementById('quick-log-fold');
@@ -3205,17 +3269,13 @@ def nav_html(
         if (t) setTimeout(() => t.focus(), 200);
         return;
       }}
+      fabSyncAmountLabel();
       if (typeof dlg.showModal === 'function') dlg.showModal();
       else dlg.setAttribute('open', '');
       if (titleEl) setTimeout(() => titleEl.focus(), 50);
     }}
     fab.addEventListener('click', openFab);
-    if (typeEl && unitEl) {{
-      typeEl.addEventListener('change', () => {{
-        const u = UNIT_BY_TYPE[typeEl.value];
-        if (u) unitEl.value = u;
-      }});
-    }}
+    if (typeEl) typeEl.addEventListener('change', fabSyncAmountLabel);
     const closeBtn = document.getElementById('fab-ql-close');
     if (closeBtn) closeBtn.addEventListener('click', () => dlg.close());
     async function fabSubmit(andApprove) {{
@@ -3223,11 +3283,12 @@ def nav_html(
       const amount = Number(amountEl && amountEl.value);
       if (!title) {{ window.showAppToast('Title required', {{ ms: 3000 }}); return; }}
       if (!(amount > 0)) {{ window.showAppToast('Amount must be > 0', {{ ms: 3000 }}); return; }}
+      const ct = (typeEl && typeEl.value) || 'anime';
       const body = {{
-        content_type: (typeEl && typeEl.value) || 'anime',
+        content_type: ct,
         title,
         amount,
-        unit: (unitEl && unitEl.value) || 'minutes',
+        unit: UNIT_BY_TYPE[ct] || 'minutes',
         source: 'manual',
         tadoku_mode: andApprove ? 'auto' : 'pending',
       }};
