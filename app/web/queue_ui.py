@@ -1506,7 +1506,9 @@ async function loadGsmPanel(opts){
       return;
     }
     gsmSetBanner(
-      st.cursor_sync_pending
+      st.device_sync && st.device_sync.enabled
+        ? `Shared GSM history · ${(st.device_sync.devices||[]).length} paired device(s)`
+        : st.cursor_sync_pending
         ? 'Connected · counter reset locally (GSM file sync pending)'
         : (st.writable_cursor
           ? 'Connected to GameSentenceMiner'

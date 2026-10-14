@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.api.deps import UiBasicAuthMiddleware
 from app.api.integrations import router as integrations_router
+from app.api.gsm_sync import router as gsm_sync_router
+from app.api.gsm_games import router as gsm_games_router
 from app.api.routes import router
 from app.core.config import get_settings
 from app.db.session import init_db
@@ -85,6 +87,8 @@ app.add_middleware(UiBasicAuthMiddleware)
 
 app.include_router(router, prefix="/api")
 app.include_router(integrations_router, prefix="/api")
+app.include_router(gsm_sync_router, prefix="/api")
+app.include_router(gsm_games_router, prefix="/api")
 
 if _STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -99,6 +103,12 @@ app.mount(
 @app.get("/", response_class=HTMLResponse)
 def index():
     return home_page()
+
+
+@app.get("/gsm-games", response_class=HTMLResponse)
+def gsm_games_page():
+    from app.web.gsm_games_ui import game_matches_page
+    return game_matches_page()
 
 
 @app.get("/queue", response_class=HTMLResponse)

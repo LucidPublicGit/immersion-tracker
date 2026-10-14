@@ -854,12 +854,31 @@ def _line_after_cursors(
     global_cursor: Optional[float],
     game_cursors: dict[str, float],
     game_key: str,
+    original_game_key: Optional[str] = None,
 ) -> bool:
     """True if this line is still pending (after global + per-game floors)."""
     floors = [v for v in (global_cursor, game_cursors.get(game_key)) if v is not None]
+    if original_game_key and original_game_key in game_cursors:
+        floors.append(game_cursors[original_game_key])
     if not floors:
         return True
     return float(created_at) > max(floors)
+
+
+def _hub_skipped_ids(con) -> set[str]:
+    """Preserve per-line exclusions when shared game associations are repaired."""
+    if 'hub_skipped_lines' not in _table_names(con):
+        return set()
+    return {str(row[0]) for row in con.execute('SELECT id FROM hub_skipped_lines')}
+
+
+def _hub_original_keys(con) -> dict[str, str]:
+    if 'hub_alias_origins' not in _table_names(con):
+        return {}
+    fields={row[1] for row in con.execute('PRAGMA table_info(hub_alias_origins)')}
+    source='COALESCE(o.source_name,l.game_name)' if 'source_name' in fields else 'l.game_name'
+    return {str(row[0]):_game_key(row[1],row[2]) for row in con.execute(
+        'SELECT o.id,o.game_id,'+source+' FROM hub_alias_origins o JOIN game_lines l ON l.id=o.id')}
 
 
 def _effective_cursor(
@@ -1250,6 +1269,8 @@ def build_preview(
             games[str(grow["id"])] = grow
 
         game_cursors = _get_game_cursors(db)
+        hub_skipped = _hub_skipped_ids(con)
+        hub_origins = _hub_original_keys(con)
         duplicates = (
             _dedupe_ids(
                 rows,
@@ -1271,6 +1292,8 @@ def build_preview(
         non_jp_chars_removed = 0
 
         for row in rows:
+            if str(row['id']) in hub_skipped:
+                continue
             created_at = float(row["created_at"] or 0)
             key = _game_key(row["game_id"], row["game_name"])
             if not _line_after_cursors(
@@ -1278,6 +1301,7 @@ def build_preview(
                 global_cursor=cursor,
                 game_cursors=game_cursors,
                 game_key=key,
+                original_game_key=hub_origins.get(str(row['id'])),
             ):
                 continue
             # Comparison totals ignore skip-repeats so strip effect is isolated
@@ -1640,14 +1664,23 @@ def mark_game_synced(db: Session, game_key: str) -> dict[str, Any]:
                     floor = 0.0
                 rows = con.execute(
                     f"""
-                    SELECT game_id, game_name, CAST(created_at AS REAL) AS ca
+                    SELECT id, game_id, game_name, CAST(created_at AS REAL) AS ca
                     FROM "{TABLE_LINES}"
                     WHERE CAST(created_at AS REAL) > ?
                     """,
                     (float(floor),),
                 ).fetchall()
+                hub_skipped = _hub_skipped_ids(con)
+                hub_origins = _hub_original_keys(con)
+                game_floors = _get_game_cursors(db)
                 for row in rows:
+                    if str(row['id']) in hub_skipped:
+                        continue
                     gk = _game_key(row["game_id"], row["game_name"])
+                    if not _line_after_cursors(row['ca'],global_cursor=floor,
+                            game_cursors=game_floors,game_key=gk,
+                            original_game_key=hub_origins.get(str(row['id']))):
+                        continue
                     if gk != key:
                         other_pending += 1
                         break
@@ -1961,6 +1994,8 @@ def _preview_with_cursor(
         ).fetchall():
             games[str(grow["id"])] = grow
         game_cursors = _get_game_cursors(db)
+        hub_skipped = _hub_skipped_ids(con)
+        hub_origins = _hub_original_keys(con)
         duplicates = (
             _dedupe_ids(
                 rows,
@@ -1981,6 +2016,8 @@ def _preview_with_cursor(
         non_jp_lines = 0
         non_jp_chars_removed = 0
         for row in rows:
+            if str(row['id']) in hub_skipped:
+                continue
             created_at = float(row["created_at"] or 0)
             key = _game_key(row["game_id"], row["game_name"])
             if not _line_after_cursors(
@@ -1988,6 +2025,7 @@ def _preview_with_cursor(
                 global_cursor=cursor,
                 game_cursors=game_cursors,
                 game_key=key,
+                original_game_key=hub_origins.get(str(row['id'])),
             ):
                 continue
             raw_for_baseline = row["line_text"]

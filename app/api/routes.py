@@ -785,6 +785,8 @@ def gsm_status_route(db: Session = Depends(get_db)):
 
     data = get_status(db).to_dict()
     data["prefs"] = get_prefs(db)
+    from app.api.gsm_sync import device_status
+    data["device_sync"] = device_status()
     return data
 
 

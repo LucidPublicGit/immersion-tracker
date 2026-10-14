@@ -9,6 +9,8 @@ services:
       DATABASE_URL: sqlite:////app/data/immersion.db
       CONFIG_PATH: /app/config/settings.yaml
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-changeme}
+      GSM_SYNC_TOKEN: ${GSM_SYNC_TOKEN:-}
+      GSM_SYNC_KEY: ${GSM_SYNC_KEY:-}
       JELLYFIN_URL: ${JELLYFIN_URL:-}
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
       UI_USERNAME: ${UI_USERNAME:-admin}

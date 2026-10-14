@@ -42,6 +42,9 @@ def _ui_auth_open_path(path: str) -> bool:
     """Paths that skip UI basic auth (webhooks/extension use WEBHOOK_SECRET)."""
     if path == "/api/health":
         return True
+    if path.startswith("/api/sync/v2/"):
+        # Every GSM sync endpoint separately requires its dedicated bearer token.
+        return True
     if path.startswith("/api/webhooks/"):
         return True
     if path.startswith("/api/youtube/"):

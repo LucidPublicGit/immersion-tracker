@@ -1488,6 +1488,7 @@ def queue_page() -> str:
         title="Fetch Hoshi Reader progress from Drive now">Sync Hoshi</button>
       <button type="button" class="secondary" id="gsm-refresh-btn"
         title="Reload GameSentenceMiner pending characters">Sync GSM</button>
+      <a href="/gsm-games">Match GSM games</a>
       <button type="button" class="secondary" id="abs-refresh-btn"
         title="Reload Audiobookshelf pending minutes">Sync ABS</button>
     </div>
