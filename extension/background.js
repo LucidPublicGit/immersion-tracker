@@ -4,7 +4,18 @@
  *
  * Works as Chromium service worker or Firefox background script.
  */
-/* global browser, chrome */
+/* global browser, chrome, pickHistoryAccount, authUserIndex, parseAccountSwitcherPayload, accountMatchesAllow, matchedAllowHandle, parseHistoryAccountName */
+
+try {
+  if (typeof pickHistoryAccount !== "function" && typeof importScripts === "function") {
+    importScripts("account-select.js");
+  }
+  if (typeof ensureDeployedServer !== "function" && typeof importScripts === "function") {
+    importScripts("shared.js");
+  }
+} catch (e) {
+  console.error("[immersion-tracker] background helpers load failed", e);
+}
 
 (function initBackground() {
   const api =
@@ -292,11 +303,21 @@
 
     // Remember signed-in viewer whenever content script reports it
     if (patch && (patch.viewerChannelId || patch.viewerHandle)) {
-      rememberViewer({
-        viewerChannelId: patch.viewerChannelId,
-        viewerHandle: patch.viewerHandle,
-        source: "progress",
-      }).catch(() => {});
+      storageGet({ allowedViewers: "" })
+        .then((cfg) => {
+          const check = viewerAllowedLocal(
+            cfg,
+            patch.viewerChannelId || "",
+            patch.viewerHandle || ""
+          );
+          if (!check.ok) return null;
+          return rememberViewer({
+            viewerChannelId: patch.viewerChannelId,
+            viewerHandle: patch.viewerHandle,
+            source: "progress",
+          });
+        })
+        .catch(() => {});
     }
 
     const now = Date.now();
@@ -529,10 +550,19 @@
   }
 
   async function postToServer(payload, cfg) {
-    const base = String((cfg && cfg.serverUrl) || "http://127.0.0.1:8000").replace(
+    let base = String((cfg && cfg.serverUrl) || "http://127.0.0.1:8000").replace(
       /\/$/,
       ""
     );
+    if (
+      typeof ensureDeployedServer === "function" &&
+      typeof isLoopbackServer === "function" &&
+      isLoopbackServer(base)
+    ) {
+      try {
+        base = await ensureDeployedServer();
+      } catch (_) {}
+    }
     const url = base + "/api/webhooks/youtube";
     const headers = { "Content-Type": "application/json" };
     if (cfg && cfg.webhookSecret) {
@@ -1541,13 +1571,31 @@
     return out;
   }
 
-  async function fetchHistoryHtml() {
-    const r = await fetch("https://www.youtube.com/feed/history", {
+  /**
+   * Ask YouTube for one signed-in account without changing the active tab.
+   * authuser is the Google account index (0 is the browser default).
+   */
+  function historyRequestParts(authUser) {
+    const index =
+      typeof authUserIndex === "function" ? authUserIndex(authUser) : null;
+    const url = new URL("https://www.youtube.com/feed/history");
+    const headers = {
+      Accept: "text/html,application/xhtml+xml",
+      "Accept-Language": "en-US,en;q=0.9,ja;q=0.8",
+    };
+    if (index != null) {
+      url.searchParams.set("authuser", String(index));
+      headers["X-Goog-AuthUser"] = String(index);
+      headers["X-YouTube-AuthUser"] = String(index);
+    }
+    return { url: url.toString(), headers, authUser: index };
+  }
+
+  async function fetchHistoryHtml(authUser) {
+    const parts = historyRequestParts(authUser);
+    const r = await fetch(parts.url, {
       credentials: "include",
-      headers: {
-        Accept: "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
+      headers: parts.headers,
       cache: "no-store",
     });
     if (!r.ok) {
@@ -1557,11 +1605,14 @@
     return html;
   }
 
-  async function browseHistoryContinuation(apiKey, client, token) {
-    const url =
+  async function browseHistoryContinuation(apiKey, client, token, authUser) {
+    const index =
+      typeof authUserIndex === "function" ? authUserIndex(authUser) : null;
+    let url =
       "https://www.youtube.com/youtubei/v1/browse?key=" +
       encodeURIComponent(apiKey) +
       "&prettyPrint=false";
+    if (index != null) url += "&authuser=" + encodeURIComponent(String(index));
     const body = {
       context: {
         client: {
@@ -1573,14 +1624,19 @@
       },
       continuation: token,
     };
+    const headers = {
+      "Content-Type": "application/json",
+      "X-YouTube-Client-Name": "1",
+      "X-YouTube-Client-Version": body.context.client.clientVersion,
+    };
+    if (index != null) {
+      headers["X-Goog-AuthUser"] = String(index);
+      headers["X-YouTube-AuthUser"] = String(index);
+    }
     const r = await fetch(url, {
       method: "POST",
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "X-YouTube-Client-Name": "1",
-        "X-YouTube-Client-Version": body.context.client.clientVersion,
-      },
+      headers,
       body: JSON.stringify(body),
       cache: "no-store",
     });
@@ -2027,22 +2083,56 @@
     return out;
   }
 
-  function viewerAllowedLocal(cfg, viewerChannelId, viewerHandle) {
+  function viewerAllowedLocal(cfg, viewerChannelId, viewerHandle, accountName) {
     const allowed = parseLinesToTokens(cfg && cfg.allowedViewers);
-    if (!allowed.length) return { ok: true, reason: "ok" };
-    const present = accountTokenSet(viewerChannelId, viewerHandle);
-    if (!present.size) return { ok: false, reason: "viewer_unknown" };
-    const allowSet = new Set();
-    for (const a of allowed) {
-      const t = normAccountToken(a);
-      if (!t) continue;
-      allowSet.add(t);
-      if (t.startsWith("@")) allowSet.add(t.slice(1));
+    const channelId = String(viewerChannelId || "").trim();
+    const handle = String(viewerHandle || "").trim();
+    const name = String(accountName || "").trim();
+    if (!allowed.length) {
+      return { ok: true, reason: "ok", viewerChannelId: channelId, viewerHandle: handle };
     }
-    for (const p of present) {
-      if (allowSet.has(p)) return { ok: true, reason: "ok" };
+    const account = {
+      handle,
+      viewerHandle: handle,
+      channelId,
+      viewerChannelId: channelId,
+      name,
+    };
+    const hasIdentity = !!(channelId || handle || name);
+    if (typeof accountMatchesAllow !== "function" || typeof matchedAllowHandle !== "function") {
+      const present = accountTokenSet(channelId, handle);
+      if (!present.size) {
+        return { ok: false, reason: "viewer_unknown", viewerChannelId: "", viewerHandle: "" };
+      }
+      const allowSet = new Set();
+      for (const a of allowed) {
+        const t = normAccountToken(a);
+        if (!t) continue;
+        allowSet.add(t);
+        if (t.startsWith("@")) allowSet.add(t.slice(1));
+      }
+      for (const p of present) {
+        if (allowSet.has(p)) {
+          return { ok: true, reason: "ok", viewerChannelId: channelId, viewerHandle: handle };
+        }
+      }
+      return { ok: false, reason: "viewer_not_allowlisted", viewerChannelId: "", viewerHandle: "" };
     }
-    return { ok: false, reason: "viewer_not_allowlisted" };
+    if (!accountMatchesAllow(account, allowed)) {
+      return {
+        ok: false,
+        reason: hasIdentity ? "viewer_not_allowlisted" : "viewer_unknown",
+        viewerChannelId: "",
+        viewerHandle: "",
+      };
+    }
+    const stamped = matchedAllowHandle(account, allowed);
+    return {
+      ok: true,
+      reason: "ok",
+      viewerChannelId: channelId,
+      viewerHandle: stamped || "",
+    };
   }
 
   function channelFilterReason(cfg, channelId, channelTitle) {
@@ -2149,6 +2239,8 @@
    * Safe sources only:
    *  - ytcfg CHANNEL_ID / DELEGATED_CHANNEL_ID
    *  - account switcher payloads (activeAccountHeaderRenderer / selected accountItem)
+   *  - ytcfg USER_ACCOUNT_NAME (display name). 2026 history HTML has no channel id.
+   *    Never use SESSION_INDEX as an authuser, and never use uploader /@ handles.
    */
   function detectViewerFromHistoryHtml(html) {
     const h = String(html || "");
@@ -2194,25 +2286,39 @@
       }
     }
 
+    const accountName =
+      typeof parseHistoryAccountName === "function" ? parseHistoryAccountName(h) : "";
+
     const loggedIn =
-      !!(channelId || handle) ||
+      !!(channelId || handle || accountName) ||
       /"LOGGED_IN"\s*:\s*true/.test(h) ||
       /"LOGGED_IN"\s*,\s*true/.test(h) ||
       /ytcfg\.set\(\s*["']LOGGED_IN["']\s*,\s*true/.test(h);
 
-    const confidence = channelId ? "high" : handle ? "medium" : loggedIn ? "logged-in-only" : "none";
+    const confidence = channelId
+      ? "high"
+      : handle
+        ? "medium"
+        : accountName
+          ? "name"
+          : loggedIn
+            ? "logged-in-only"
+            : "none";
 
     return {
       viewerChannelId: channelId || "",
       viewerHandle: handle || "",
+      accountName: accountName || "",
       loggedIn: !!loggedIn,
       confidence,
       source:
         channelId || handle
           ? "history-html"
-          : loggedIn
-            ? "history-html-logged-in"
-            : "",
+          : accountName
+            ? "history-html-name"
+            : loggedIn
+              ? "history-html-logged-in"
+              : "",
     };
   }
 
@@ -2426,7 +2532,8 @@
     const check = viewerAllowedLocal(
       cfg,
       viewer.viewerChannelId || "",
-      viewer.viewerHandle || ""
+      viewer.viewerHandle || "",
+      viewer.accountName || viewer.name || ""
     );
     return check.ok;
   }
@@ -2519,6 +2626,252 @@
     };
   }
 
+  function historyAccountLabel(account) {
+    if (!account) return "";
+    return (
+      account.viewerHandle ||
+      account.handle ||
+      account.viewerChannelId ||
+      account.channelId ||
+      account.email ||
+      account.name ||
+      ""
+    );
+  }
+
+  async function fetchAccountSwitcherText() {
+    const r = await fetch("https://www.youtube.com/getAccountSwitcherEndpoint", {
+      credentials: "include",
+      headers: { Accept: "application/json,text/html" },
+      cache: "no-store",
+    });
+    if (!r.ok) throw new Error("switcher_http_" + r.status);
+    return r.text();
+  }
+
+  async function loadResolvedHistoryAccount() {
+    try {
+      const stored = await storageGet({ historyAuthUserResolved: null });
+      const row = stored && stored.historyAuthUserResolved;
+      if (!row || typeof row !== "object") return null;
+      const authUser =
+        typeof authUserIndex === "function" ? authUserIndex(row.authUser) : null;
+      if (authUser == null) return null;
+      return {
+        authUser,
+        handle: row.handle || "",
+        channelId: row.channelId || "",
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function rememberResolvedHistoryAccount(account) {
+    if (!account || account.authUser == null) return;
+    try {
+      await storageSet({
+        historyAuthUserResolved: {
+          authUser: account.authUser,
+          handle: account.handle || account.viewerHandle || "",
+          channelId: account.channelId || account.viewerChannelId || "",
+          at: Date.now(),
+        },
+      });
+    } catch (_) {}
+  }
+
+  /**
+   * Choose the Google account index whose YouTube history we should read.
+   * A pinned Settings value wins. Otherwise match the viewer allowlist.
+   * Never switches the account active in the user's YouTube tab.
+   */
+  async function resolveHistoryTarget(cfg) {
+    const allow = parseLinesToTokens(cfg && cfg.allowedViewers);
+    const pinned =
+      typeof authUserIndex === "function"
+        ? authUserIndex(cfg && cfg.historyAuthUser)
+        : null;
+    if (pinned != null) {
+      return { authUser: pinned, source: "pinned", accounts: [] };
+    }
+
+    // The account YouTube is using right now. Forcing authuser=0 snaps back
+    // to the first Google account (often English). authuser=1 is also a
+    // different history. SESSION_INDEX on the page is not the index to request.
+    let activeName = "";
+    try {
+      const html = await fetchHistoryHtml(null);
+      const detected = detectViewerFromHistoryHtml(html);
+      activeName = detected.accountName || "";
+      const identified = !!(
+        detected.viewerChannelId ||
+        detected.viewerHandle ||
+        detected.accountName
+      );
+      const allowed =
+        !allow.length || (identified && identityAllowed(cfg, detected));
+      if (detected.loggedIn && allowed && (identified || !allow.length)) {
+        const check = viewerAllowedLocal(
+          cfg,
+          detected.viewerChannelId,
+          detected.viewerHandle,
+          detected.accountName
+        );
+        return {
+          authUser: null,
+          source: "active-session",
+          account: {
+            authUser: null,
+            handle: (check && check.viewerHandle) || detected.viewerHandle || "",
+            channelId: detected.viewerChannelId || "",
+            name: detected.accountName || "",
+          },
+          accounts: [],
+          html,
+        };
+      }
+    } catch (_) {}
+
+    let accounts = [];
+    try {
+      const text = await fetchAccountSwitcherText();
+      if (typeof parseAccountSwitcherPayload === "function") {
+        accounts = parseAccountSwitcherPayload(text);
+      }
+    } catch (_) {}
+
+    const candidates = [];
+    if (typeof pickHistoryAccount === "function" && accounts.length) {
+      const picked = pickHistoryAccount(accounts, allow);
+      if (picked && picked.authUser != null) {
+        candidates.push({ account: picked, source: "switcher" });
+      }
+    }
+    const cached = await loadResolvedHistoryAccount();
+    if (
+      cached &&
+      (typeof accountMatchesAllow !== "function" ||
+        !allow.length ||
+        accountMatchesAllow(cached, allow))
+    ) {
+      candidates.push({ account: cached, source: "cache" });
+    }
+    for (const candidate of candidates) {
+      try {
+        const html = await fetchHistoryHtml(candidate.account.authUser);
+        const page = viewerFromHistoryPage(html, cfg, candidate.account);
+        if (page.ok) {
+          return {
+            authUser: candidate.account.authUser,
+            source: candidate.source,
+            account: candidate.account,
+            accounts,
+            html,
+          };
+        }
+      } catch (_) {}
+    }
+
+    const probed = [];
+    let baseline = "";
+    for (let i = 0; i < 6; i++) {
+      let html = "";
+      try {
+        html = await fetchHistoryHtml(i);
+      } catch (_) {
+        break;
+      }
+      const viewer = detectViewerFromHistoryHtml(html);
+      const key =
+        (viewer.viewerChannelId || "") +
+        "|" +
+        (viewer.viewerHandle || "") +
+        "|" +
+        (viewer.accountName || "");
+      if (i === 0) baseline = key;
+      else if (key && baseline && key === baseline && key !== "||" && i >= 2) break;
+      if (key && key !== "||" && probed.some((row) => row.key === key)) break;
+      const row = {
+        authUser: i,
+        handle: viewer.viewerHandle || "",
+        channelId: viewer.viewerChannelId || "",
+        name: viewer.accountName || "",
+        viewerHandle: viewer.viewerHandle || "",
+        viewerChannelId: viewer.viewerChannelId || "",
+        selected: i === 0,
+        key,
+        html,
+      };
+      probed.push(row);
+      const matches = !allow.length
+        ? i === 0
+        : typeof accountMatchesAllow === "function" &&
+          accountMatchesAllow(row, allow);
+      if (matches && (row.handle || row.channelId || row.name || !allow.length)) {
+        if (allow.length && typeof matchedAllowHandle === "function") {
+          const stamped = matchedAllowHandle(row, allow);
+          if (stamped) {
+            row.handle = stamped;
+            row.viewerHandle = stamped;
+          }
+        }
+        return {
+          authUser: i,
+          source: "probe",
+          account: row,
+          accounts: probed,
+          html,
+        };
+      }
+    }
+
+    const found = (accounts.length ? accounts : probed).map((account) => ({
+      authUser: account.authUser,
+      handle: account.handle || account.viewerHandle || "",
+      channelId: account.channelId || account.viewerChannelId || "",
+      email: account.email || "",
+      name: account.name || "",
+      selected: !!account.selected,
+    }));
+    return {
+      authUser: null,
+      source: "unresolved",
+      accounts: found,
+      activeName,
+      error: "viewer_account_missing",
+    };
+  }
+
+  function viewerFromHistoryPage(html, cfg) {
+    const detected = detectViewerFromHistoryHtml(html);
+    const allow = parseLinesToTokens(cfg && cfg.allowedViewers);
+    const name = detected.accountName || "";
+    const handle = detected.viewerHandle || "";
+    const channelId = detected.viewerChannelId || "";
+    if (handle || channelId || name) {
+      const check = viewerAllowedLocal(cfg, channelId, handle, name);
+      return {
+        ok: !!check.ok,
+        reason: check.reason,
+        viewerChannelId: channelId,
+        viewerHandle: check.ok ? check.viewerHandle || "" : "",
+        accountName: name,
+        loggedIn: !!detected.loggedIn,
+        source: detected.source || "history",
+      };
+    }
+    return {
+      ok: !allow.length && !!detected.loggedIn,
+      reason: allow.length ? "viewer_unknown" : "ok",
+      viewerChannelId: "",
+      viewerHandle: "",
+      accountName: "",
+      loggedIn: !!detected.loggedIn,
+      source: detected.loggedIn ? "history-html-logged-in" : "",
+    };
+  }
+
   /**
    * Scan YouTube account history for untracked videos within lookbackDays.
    */
@@ -2528,6 +2881,10 @@
       Math.min(90, Number(opts && opts.lookbackDays) || 7)
     );
     const applyFilters = opts && opts.applyFilters !== false;
+
+    try {
+      if (typeof ensureDeployedServer === "function") await ensureDeployedServer();
+    } catch (_) {}
 
     // Auto-fill empty viewer/channel lists from server config (no YouTube tab needed)
     try {
@@ -2563,15 +2920,39 @@
     const completionThreshold =
       Number.isFinite(thr) && thr > 0 && thr <= 1 ? thr : 0.9;
 
-    let html;
-    try {
-      html = await fetchHistoryHtml();
-    } catch (e) {
+    const target = await resolveHistoryTarget(cfg);
+    if (target.authUser == null && !target.html) {
+      const labels = (target.accounts || [])
+        .map(historyAccountLabel)
+        .filter(Boolean);
+      const signedInAs = target.activeName ? " Signed in as " + target.activeName + "." : "";
       return {
         ok: false,
-        error: String(e && e.message ? e.message : e),
-        hint: "Could not open YouTube history. Stay signed into youtube.com in this browser.",
+        error: "viewer_account_missing",
+        accounts: target.accounts || [],
+        hint: labels.length
+          ? "The viewer list is not one of the signed-in YouTube accounts (" +
+            labels.join(", ") +
+            ")." +
+            signedInAs +
+            " Sign that account into this browser — the other account can stay signed in — then scan again."
+          : "Sign the immersion YouTube account into this browser. You can leave another account signed in. Settings → List accounts." +
+            signedInAs,
       };
+    }
+
+    let html = target.html || "";
+    if (!html) {
+      try {
+        html = await fetchHistoryHtml(target.authUser);
+      } catch (e) {
+        return {
+          ok: false,
+          error: String(e && e.message ? e.message : e),
+          authUser: target.authUser,
+          hint: "Could not open YouTube history for that account. Stay signed into both accounts in this browser.",
+        };
+      }
     }
 
     const initialData = extractJsonAssignment(html, "ytInitialData");
@@ -2579,39 +2960,48 @@
       return {
         ok: false,
         error: "not_signed_in",
-        hint: "Sign into your immersion YouTube account in this browser, open youtube.com/feed/history once, then try again.",
+        authUser: target.authUser,
+        hint: "That YouTube account is not signed in. Add it in this browser without making it the active account, then scan again.",
       };
     }
     if (!initialData) {
       return {
         ok: false,
         error: "no_history_data",
-        hint: "Could not parse history page. Open https://www.youtube.com/feed/history in a tab and retry.",
+        authUser: target.authUser,
+        hint: "Could not parse history for the selected account. Open Settings → List accounts and pick the Japanese account.",
       };
     }
 
-    // Works from any tab: history HTML, open YT tabs, cache, or allowlist fallback
-    const viewer = await resolveViewerIdentity({
-      html,
-      cfg,
-      historyLooksLoggedIn: true,
-    });
-    const viewerCheck = viewerAllowedLocal(
-      cfg,
-      viewer.viewerChannelId,
-      viewer.viewerHandle
-    );
-    if (!viewerCheck.ok) {
+    // Identity comes from the history page we actually fetched, not the active tab.
+    const pageViewer = viewerFromHistoryPage(html, cfg, target.account);
+    if (!pageViewer.ok) {
       return {
         ok: false,
-        error: viewerCheck.reason,
-        viewer,
+        error: pageViewer.reason || "viewer_not_allowlisted",
+        viewer: pageViewer,
+        authUser: target.authUser,
+        accounts: target.accounts || [],
         hint:
-          viewerCheck.reason === "viewer_unknown"
-            ? "Could not detect which YouTube account is signed in. Set Settings → Who can log (or server viewer_allowlist), or open youtube.com once so the extension can cache your account."
-            : "Signed-in account is not on the viewer allowlist. Switch account or update Settings → Who can log.",
+          pageViewer.reason === "viewer_unknown"
+            ? "Opened history but could not tell which account it belongs to. Settings → List accounts, then pick the Japanese account."
+            : "History account " +
+              (historyAccountLabel(pageViewer) || "index " + target.authUser) +
+              " is not on the viewer list. Pick the Japanese account in Settings. The YouTube tab can stay on the other account.",
       };
     }
+    const viewer = {
+      viewerChannelId: pageViewer.viewerChannelId || "",
+      viewerHandle: pageViewer.viewerHandle || "",
+      loggedIn: true,
+      source: pageViewer.source || target.source || "history",
+      authUser: target.authUser,
+    };
+    await rememberResolvedHistoryAccount({
+      authUser: target.authUser,
+      handle: viewer.viewerHandle,
+      channelId: viewer.viewerChannelId,
+    });
 
     const apiKey =
       extractBetween(html, /"INNERTUBE_API_KEY":"([^"]+)"/) ||
@@ -2644,7 +3034,12 @@
     ) {
       try {
         if (!apiKey) break;
-        const next = await browseHistoryContinuation(apiKey, client, cont.token);
+        const next = await browseHistoryContinuation(
+          apiKey,
+          client,
+          cont.token,
+          target.authUser
+        );
         walkCollect(next, collected, "");
         cont.token = "";
         findContinuationToken(next, cont);
@@ -2968,6 +3363,7 @@
       enrich: enrichInfo,
       skipped,
       viewer,
+      authUser: target.authUser,
       cutoffIso: new Date(cutoff).toISOString(),
     };
   }
@@ -3001,10 +3397,17 @@
       gl: "US",
     };
     try {
-      let html = "";
-      try {
-        html = await fetchHistoryHtml();
-      } catch (_) {}
+      const cfgLocal = await storageGet({
+        allowedViewers: "",
+        historyAuthUser: "",
+      });
+      const target = await resolveHistoryTarget(cfgLocal);
+      let html = target.html || "";
+      if (!html && target.authUser != null) {
+        try {
+          html = await fetchHistoryHtml(target.authUser);
+        } catch (_) {}
+      }
       if (html) {
         apiKey =
           extractBetween(html, /"INNERTUBE_API_KEY":"([^"]+)"/) ||
@@ -3017,15 +3420,14 @@
         client.clientVersion = clientVersion;
       }
       if (!viewerChannelId && !viewerHandle) {
-        const cfgLocal = await storageGet({ allowedViewers: "" });
-        const v = await resolveViewerIdentity({
-          html,
-          cfg: cfgLocal,
-          historyLooksLoggedIn: !!html,
-        });
-        viewerChannelId = v.viewerChannelId || "";
-        viewerHandle = v.viewerHandle || "";
+        const pageViewer = viewerFromHistoryPage(html, cfgLocal);
+        if (pageViewer.ok) {
+          viewerChannelId = pageViewer.viewerChannelId || "";
+          viewerHandle = pageViewer.viewerHandle || "";
+        }
       }
+      const stamped = viewerAllowedLocal(cfgLocal, viewerChannelId, viewerHandle, "");
+      if (stamped.ok && stamped.viewerHandle) viewerHandle = stamped.viewerHandle;
     } catch (_) {}
 
     const results = [];
@@ -3195,18 +3597,64 @@
           return batchLogHistory(msg.items || [], msg.opts || {});
 
         case "DETECT_VIEWER":
+        case "LIST_YOUTUBE_ACCOUNTS":
           return (async () => {
-            let html = "";
-            try {
-              html = await fetchHistoryHtml();
-            } catch (_) {}
-            const viewer = await resolveViewerIdentity({
-              html,
-              historyLooksLoggedIn: !!(html && !looksLoggedOut(html, extractJsonAssignment(html, "ytInitialData"))),
+            const cfg = await storageGet({
+              allowedViewers: "",
+              historyAuthUser: "",
             });
+            try {
+              await pullServerYoutubeConfig({ force: false });
+            } catch (_) {}
+            const fresh = await storageGet({
+              allowedViewers: "",
+              historyAuthUser: "",
+            });
+            const merged = Object.assign({}, cfg, fresh);
+            const target = await resolveHistoryTarget(merged);
+            let viewer = {
+              viewerChannelId: "",
+              viewerHandle: "",
+              loggedIn: false,
+              source: target.source || "",
+            };
+            let html = target.html || "";
+            if (!html && target.authUser != null) {
+              try {
+                html = await fetchHistoryHtml(target.authUser);
+              } catch (_) {}
+            }
+            if (html) {
+              viewer = viewerFromHistoryPage(html, merged);
+            } else if (target.account && target.authUser != null) {
+              viewer = {
+                viewerChannelId: target.account.channelId || "",
+                viewerHandle: target.account.handle || "",
+                loggedIn: true,
+                source: target.source || "",
+                ok: true,
+              };
+            }
+            const accounts = (target.accounts || []).map((account) => ({
+              authUser: account.authUser,
+              handle: account.handle || account.viewerHandle || "",
+              channelId: account.channelId || account.viewerChannelId || "",
+              email: account.email || "",
+              name: account.name || "",
+              selected: !!account.selected,
+            }));
             return {
               ok: !!(viewer.viewerChannelId || viewer.viewerHandle),
-              ...viewer,
+              viewerChannelId: viewer.viewerChannelId || "",
+              viewerHandle: viewer.viewerHandle || "",
+              loggedIn: !!viewer.loggedIn,
+              source: viewer.source || target.source || "",
+              authUser: target.authUser,
+              accounts,
+              error:
+                viewer.viewerChannelId || viewer.viewerHandle
+                  ? ""
+                  : target.error || "viewer_account_missing",
             };
           })();
 

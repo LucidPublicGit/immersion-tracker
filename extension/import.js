@@ -23,6 +23,8 @@ let sectionCollapsed = false;
 
 const SCAN_CACHE_KEY = "historyScanCache";
 const SCAN_CACHE_TTL_MS = 7 * 86400000;
+/** Drop scans from before the active-session account fix (those labeled the wrong history). */
+const SCAN_CACHE_REVISION = 2;
 const COLLAPSED_KEY = "historyImportCollapsed";
 
 function importUiPresent() {
@@ -461,6 +463,7 @@ async function persistImportSettings() {
 async function persistScanCache() {
   const payload = {
     at: Date.now(),
+    revision: SCAN_CACHE_REVISION,
     lookbackDays: readLookbackDays(),
     applyFilters: readApplyFilters(),
     activeTab,
@@ -517,10 +520,16 @@ function applyScanResult(res, opts) {
       meta.innerHTML = res.metaHtml;
       lastScanMetaHtml = res.metaHtml;
     } else {
+      const sessionNote =
+        res.authUser != null && res.authUser !== ""
+          ? " · session " + escapeHtml(String(res.authUser))
+          : "";
       lastScanMetaHtml =
         "Account: <strong>" +
         escapeHtml(viewerLabel) +
-        "</strong> · lookback " +
+        "</strong>" +
+        sessionNote +
+        " · lookback " +
         (res.lookbackDays != null ? res.lookbackDays : readLookbackDays()) +
         "d · scanned " +
         (res.scanned != null ? res.scanned : "?") +
@@ -614,12 +623,21 @@ async function scan() {
   const meta = document.getElementById("scanMeta");
   if (meta) {
     meta.hidden = false;
-    meta.textContent = "Fetching feed/history (signed-in session)…";
+    meta.textContent = "Fetching history for the viewer-list account…";
   }
 
   const lookbackDays = readLookbackDays();
   const applyFilters = readApplyFilters();
   await persistImportSettings();
+  if (typeof grantConfiguredServer === "function") {
+    const granted = await grantConfiguredServer();
+    if (!granted) {
+      setImportStatus("Allow the tracker server when Firefox asks, then scan again.", "err");
+      scanning = false;
+      if (btn) btn.disabled = false;
+      return;
+    }
+  }
 
   try {
     const res = await runtimeSend({
@@ -671,6 +689,15 @@ async function batchLog() {
   logging = true;
   updateSummary();
   setImportStatus("Logging " + approved.length + " video(s)…", "");
+  if (typeof grantConfiguredServer === "function") {
+    const granted = await grantConfiguredServer();
+    if (!granted) {
+      setImportStatus("Allow the tracker server when Firefox asks, then log again.", "err");
+      logging = false;
+      updateSummary();
+      return;
+    }
+  }
 
   const rejected = isCompactImport()
     ? readyCandidates.filter((c) => c.decision === "reject")
@@ -761,6 +788,7 @@ async function restoreScanCache() {
     const stored = await storageGet({ [SCAN_CACHE_KEY]: null });
     const cache = stored[SCAN_CACHE_KEY];
     if (!cache || typeof cache !== "object") return false;
+    if (cache.revision !== SCAN_CACHE_REVISION) return false;
     if (cache.at && Date.now() - Number(cache.at) > SCAN_CACHE_TTL_MS) return false;
     const hasRows =
       (Array.isArray(cache.candidates) && cache.candidates.length) ||

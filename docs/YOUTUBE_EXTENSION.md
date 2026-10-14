@@ -55,7 +55,7 @@ Open the toolbar popup → **gear** (or right‑click extension → Options / Ma
 
 | Setting | This PC | Other PC (LAN) |
 |---------|---------|----------------|
-| Server URL | `http://127.0.0.1:8000` | `http://<host-ip>:8000` |
+| Server URL | `http://127.0.0.1:8000` when the tracker runs on this PC | The tracker’s Tailscale or LAN URL. Do not use this PC’s localhost if the app runs on another machine. |
 | Webhook secret | same as `.env` `WEBHOOK_SECRET` | same |
 | Threshold | `90%` | `90%` |
 | Min watch time | `300` s (5 min) | same |
@@ -65,6 +65,14 @@ Open the toolbar popup → **gear** (or right‑click extension → Options / Ma
 | Channel mode | Any (or allowlist) | same |
 
 **Save all** → **Test server** → Server OK. Popup shows live watch status; **History** (clock icon) shows the full activity list.
+
+If Server URL is still `http://127.0.0.1:8000` and that tracker is not running, the extension can adopt a machine-local URL from `extension/deployed-server.local.json` (gitignored):
+
+```json
+{ "serverUrl": "https://your-tracker.example" }
+```
+
+Reload the extension, open Settings, and click **Save all** so Firefox can allow that host. The public repo does not contain the deployed hostname.
 
 ### This tab preview
 
@@ -98,7 +106,7 @@ YouTube defaults to Tadoku **`auto`** → status **ready** (exportable / auto-su
 Use **Log from history** when live tab tracking missed a watch (another device, closed tab, TV app, etc.). YouTube does not expose “percent watched” for those sessions; the extension scans `youtube.com/feed/history` for the Google account signed into **this** browser.
 
 1. Open the extension popup — **Log from history** is embedded in the popup (lookback, scan, Ready/Unfinished list). The full Activity page also has an **Activity | From history** tab for a larger review surface.
-2. Confirm you are signed into the immersion account in **this** browser (Settings → Detect account / viewer list, or **Pull from server**).
+2. On youtube.com in **this** browser, switch to the immersion account once (the other Google account can stay signed in). Auto then reads that account’s history without changing the tab again. Settings → **History import account** stays on Auto.
 3. Choose lookback (**7 days** default) → **Scan history** — works from any tab (no need to leave youtube.com open). Lookback, filter checkbox, and last scan (with approve/reject decisions) are **cached** in this browser across refresh.
 4. Approve immersion videos, reject junk / English / accidents.
 5. **Log approved** (optionally **Save rejects** first).
@@ -106,7 +114,7 @@ Use **Log from history** when live tab tracking missed a watch (another device, 
 Notes:
 
 - Uses `https://www.youtube.com/feed/history` with your browser session cookies (no Google API key).
-- Viewer identity is resolved without requiring an active YouTube tab: history HTML → open YT tabs → last cached account → extension/server viewer allowlist.
+- Viewer identity comes from the history page that was fetched (display name or channel id). A missing identity is not filled in from the allowlist, so English history is not labeled as the Japanese account.
 - Empty local allowlists are auto-filled from `GET /api/youtube/extension-config` (server `viewer_allowlist` / channel lists).
 - Already-logged videos (server + local) and previously rejected ids are hidden.
 - **Ready to log** tab: **known** progress ≥ completion threshold (history resume bar or live tracking on this browser) **and** estimated watched time ≥ min-watch (default **5 minutes**). Merely appearing in YouTube history is not treated as finished. Channel / Shorts / Live / Japanese filters still apply when enabled. **Approve** always logs a full watch (100% of media length).
@@ -131,20 +139,21 @@ Expect `accepted: true` and a new log. A second POST with the same `video_id` re
 
 ## Which YouTube *account* is tracked?
 
-Two layers (use either or both):
+Live tab tracking follows the account that YouTube tab is using. **Log from history** reads the YouTube account this browser is already signed in as (`youtube.com/feed/history` with no `authuser`). That is the account YouTube last switched to, including watches from a phone or another computer. Both Google accounts can stay signed in. The scan does not change the YouTube tab.
 
-### A. Browser profile (simple)
+History HTML identifies that account by its display name (`USER_ACCOUNT_NAME`), not by a channel id. The display name matches an allowlist handle at a hyphen: `ルシド` matches `@ルシド-q4w`. The webhook sends the allowlist handle. If the signed-in account is not on the viewer list, the scan then tries the other signed-in accounts by `authuser` index. Pin **History import account** only when Auto picks the wrong one.
 
-Install the extension only in the profile signed into your immersion YouTube account.
+### Viewer allowlist
 
-### B. Viewer allowlist (explicit)
+**Settings** → **Only log when signed in as**
+Paste `@handle` and/or `UC…` channel id (one per line). Empty = the account currently active in the tab.
 
-**Settings** (popup gear) → **Only log when signed in as** (viewer list)  
-Paste `@handle` and/or `UC…` channel id (one per line). Empty = any signed-in account.
+1. Sign the immersion account into this browser (the other account can stay active)
+2. Settings → **List accounts**
+3. Leave **History import account** on **Auto — the account YouTube is using**, or pin a session
+4. **Add to viewer list** if the handle is not already there
 
-1. Open youtube.com signed into the immersion account  
-2. Settings → **Detect account**  
-3. **Add to viewer list** (auto-saves)
+A dedicated browser profile still works if you only want one account.
 
 **Server** (enforced for every PC), `config/settings.yaml`:
 

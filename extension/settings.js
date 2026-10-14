@@ -17,6 +17,38 @@ function setUseEnabled(on) {
   if (btn) btn.disabled = !on;
 }
 
+function fillHistoryAccountSelect(accounts, pinnedValue) {
+  const select = document.getElementById("historyAuthUser");
+  if (!select) return;
+  const keep = pinnedValue != null ? String(pinnedValue) : select.value;
+  select.replaceChildren();
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "Auto — match the viewer list";
+  select.appendChild(auto);
+  const seen = new Set([""]);
+  for (const account of accounts || []) {
+    if (account == null || account.authUser == null || account.authUser === "") continue;
+    const value = String(account.authUser);
+    if (seen.has(value)) continue;
+    seen.add(value);
+    const label =
+      account.handle || account.channelId || account.email || account.name || "Account " + value;
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent =
+      label + " · session " + value + (account.selected ? " · tab default" : "");
+    select.appendChild(opt);
+  }
+  if (keep && !seen.has(keep)) {
+    const opt = document.createElement("option");
+    opt.value = keep;
+    opt.textContent = "Session " + keep;
+    select.appendChild(opt);
+  }
+  select.value = keep && [...select.options].some((opt) => opt.value === keep) ? keep : "";
+}
+
 async function detectViewer() {
   lastDetected = { handle: "", channelId: "" };
   setUseEnabled(false);
@@ -24,28 +56,48 @@ async function detectViewer() {
   setDetectPanel(
     "warn",
     "Checking…",
-    "Resolving signed-in account (history session, open YouTube tabs, or cache)."
+    "Listing signed-in YouTube accounts. The active YouTube tab stays as it is."
   );
-  setStatus("Detecting account…");
+  setStatus("Listing accounts…");
 
   const btn = document.getElementById("detect");
   if (btn) btn.disabled = true;
   try {
-    // Background resolves without requiring this tab to be YouTube
-    const res = await runtimeSend({ type: "DETECT_VIEWER" });
+    const res = await runtimeSend({ type: "LIST_YOUTUBE_ACCOUNTS" });
+    const accounts = (res && res.accounts) || [];
+    fillHistoryAccountSelect(accounts, document.getElementById("historyAuthUser")?.value || "");
     const handle = ((res && res.viewerHandle) || "").trim();
     const channelId = ((res && res.viewerChannelId) || "").trim();
+    const listed = accounts
+      .map((account) => {
+        const label = account.handle || account.channelId || account.email || account.name;
+        if (!label && account.authUser == null) return "";
+        return (label || "Account") + " (session " + account.authUser + ")";
+      })
+      .filter(Boolean);
 
     if (handle || channelId) {
       lastDetected = { handle, channelId };
       const lines = [];
-      if (handle) lines.push("Handle: " + handle);
+      if (handle) lines.push("History import: " + handle);
       if (channelId) lines.push("Channel id: " + channelId);
-      if (res && res.source) lines.push("Source: " + res.source);
-      lines.push("", "Click “Add to viewer list” to restrict logging to this account.");
+      if (res && res.authUser != null) lines.push("Session index: " + res.authUser);
+      if (listed.length) lines.push("", "Signed in: " + listed.join(", "));
+      lines.push("", "The YouTube tab is left on whichever account is already active.");
       setDetectPanel("ok", handle || channelId, lines.join("\n"));
       setUseEnabled(true);
-      setStatus("Detected: " + (handle || channelId), "ok");
+      setStatus("History account: " + (handle || channelId), "ok");
+      return;
+    }
+
+    if (listed.length || (res && res.error)) {
+      setDetectPanel(
+        "err",
+        "Immersion account is not signed in here",
+        (listed.length ? "Signed in now: " + listed.join(", ") + "\n\n" : "") +
+          "Add the Japanese account in this browser and leave the other one active, then List accounts again."
+      );
+      setStatus("History account is not in this browser", "err");
       return;
     }
 
@@ -223,6 +275,7 @@ if (clearSecretBtn) {
 const AUTO_SAVE_IDS = [
   "enabled",
   "allowedViewers",
+  "historyAuthUser",
   "channelAllowlist",
   "channelBlocklist",
   "videoBlocklist",

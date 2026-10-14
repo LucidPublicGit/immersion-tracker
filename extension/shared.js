@@ -8,12 +8,76 @@ const api =
  * All settings persist in browser.storage.local (device-local only).
  * Safe for webhook secrets: never uses storage.sync (cloud / account sync).
  */
+
+function isLoopbackServer(url) {
+  try {
+    const host = new URL(String(url || "")).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Optional per-machine tracker origin. The file is gitignored so a tailnet
+ * hostname never enters the public repo. Missing file means "no override".
+ */
+async function localDeployedServerUrl() {
+  if (!api || !api.runtime || !api.runtime.getURL) return "";
+  try {
+    const response = await fetch(api.runtime.getURL("deployed-server.local.json"), {
+      cache: "no-store",
+    });
+    if (!response.ok) return "";
+    const data = await response.json();
+    const server = String((data && data.serverUrl) || "")
+      .trim()
+      .replace(/\/$/, "");
+    if (!server || isLoopbackServer(server)) return "";
+    const parsed = new URL(server);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+    return server;
+  } catch (_) {
+    return "";
+  }
+}
+
+/**
+ * Posts were still aimed at 127.0.0.1 after the app moved off this PC.
+ * If localhost is down, adopt the URL in deployed-server.local.json.
+ */
+async function ensureDeployedServer() {
+  const stored = await storageGet({ serverUrl: "http://127.0.0.1:8000" });
+  const current = String((stored && stored.serverUrl) || "http://127.0.0.1:8000").replace(
+    /\/$/,
+    ""
+  );
+  if (!isLoopbackServer(current)) return current;
+  try {
+    const local = await fetch(current + "/api/health", { cache: "no-store" });
+    if (local.ok) return current;
+  } catch (_) {}
+  const deployed = await localDeployedServerUrl();
+  if (!deployed) return current;
+  await storageSet({ serverUrl: deployed });
+  return deployed;
+}
+
+/** Call from a click handler before talking to a non-localhost tracker. */
+async function grantConfiguredServer() {
+  const base = await ensureDeployedServer();
+  if (!base || isLoopbackServer(base)) return true;
+  return requestHostIfNeeded(base);
+}
+
 const defaults = {
   serverUrl: "http://127.0.0.1:8000",
   webhookSecret: "",
   threshold: 0.9,
   enabled: true,
   allowedViewers: "",
+  /** "" = auto (match viewer list). "0", "1", … pin a Google account index. */
+  historyAuthUser: "",
   channelMode: "all",
   channelAllowlist: "",
   channelBlocklist: "",
@@ -475,6 +539,7 @@ function readFormConfig(opts) {
   const shortsEl = document.getElementById("blockShorts");
   const liveEl = document.getElementById("blockLive");
   const serverEl = document.getElementById("serverUrl");
+  const historyAccountEl = document.getElementById("historyAuthUser");
 
   return {
     serverUrl: serverEl
@@ -484,6 +549,9 @@ function readFormConfig(opts) {
     threshold: thresholdToStorage(pct),
     enabled: enabledEl ? enabledEl.checked : cachedSettings.enabled !== false,
     allowedViewers: allowedEl ? allowedEl.value.trim() : cachedSettings.allowedViewers || "",
+    historyAuthUser: historyAccountEl
+      ? historyAccountEl.value.trim()
+      : cachedSettings.historyAuthUser || "",
     channelMode: channelModeValue(),
     channelAllowlist: allowEl ? allowEl.value.trim() : cachedSettings.channelAllowlist || "",
     channelBlocklist: blockEl ? blockEl.value.trim() : cachedSettings.channelBlocklist || "",
@@ -502,6 +570,19 @@ function readFormConfig(opts) {
   };
 }
 
+function ensureHistoryAuthOption(value) {
+  const select = document.getElementById("historyAuthUser");
+  if (!select) return;
+  const v = value == null ? "" : String(value).trim();
+  if (v && ![...select.options].some((opt) => opt.value === v)) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = "Session " + v;
+    select.appendChild(opt);
+  }
+  select.value = v;
+}
+
 function applyConfigToForm(cfg) {
   applyingForm = true;
   try {
@@ -518,6 +599,7 @@ function applyConfigToForm(cfg) {
     if (enabledEl) enabledEl.checked = cfg.enabled !== false;
     const allowedEl = document.getElementById("allowedViewers");
     if (allowedEl) allowedEl.value = cfg.allowedViewers || "";
+    ensureHistoryAuthOption(cfg.historyAuthUser || "");
     setChannelMode(cfg.channelMode === "allowlist" ? "allowlist" : "all");
     const allowEl = document.getElementById("channelAllowlist");
     if (allowEl) allowEl.value = cfg.channelAllowlist || "";
@@ -1411,6 +1493,9 @@ async function forceQueueThisTab() {
 async function loadSettingsIntoCache() {
   try {
     await migrateSyncToLocal();
+  } catch (_) {}
+  try {
+    await ensureDeployedServer();
   } catch (_) {}
   const cfg = await storageGet(defaults);
   const merged = Object.assign({}, defaults, cfg);

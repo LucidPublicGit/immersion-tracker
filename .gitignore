@@ -48,6 +48,9 @@ scripts/asbplayer/*.local.js
 scripts/mpv/*.local.lua
 **/immersion-tracker.local.*
 
+# Per-machine tracker origin for the YouTube extension. Never commit a tailnet hostname.
+extension/deployed-server.local.json
+
 # Generic JSON ignore for accidental dumps (keep extension manifest)
 *.json
 !extension/manifest.json

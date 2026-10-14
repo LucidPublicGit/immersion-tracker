@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lucid Immersion Tracker — YouTube",
-  "version": "1.9.9",
+  "version": "1.10.3",
   "description": "Logs YouTube immersion to Lucid Immersion Tracker (once-ever video dedupe, min watch time, local queue, log from history).",
   "browser_specific_settings": {
     "gecko": {
@@ -96,7 +96,7 @@
     }
   ],
   "background": {
-    "scripts": ["background.js"],
+    "scripts": ["account-select.js", "shared.js", "background.js"],
     "service_worker": "background.js"
   },
   "options_ui": {

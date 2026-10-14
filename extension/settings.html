@@ -51,11 +51,11 @@
           <div class="panel-b">
             <div id="detected" class="detect-main">Not checked yet</div>
             <div id="detectDetail" class="detect-detail">
-              Open youtube.com signed in as your immersion account, then Detect.
-              This is <strong>you</strong> (the Google account) — not the video uploader.
+              Sign the Japanese account into this browser and leave the other account active.
+              History import reads the viewer list. It does not switch the YouTube tab.
             </div>
             <div class="buttons">
-              <button id="detect" type="button" class="secondary">Detect account</button>
+              <button id="detect" type="button" class="secondary">List accounts</button>
               <button id="useDetected" type="button" disabled>Add to viewer list</button>
               <button id="pullServerConfig" type="button" class="secondary" title="Copy viewer/channel lists from server settings.yaml">
                 Pull from server
@@ -66,9 +66,18 @@
               <textarea id="allowedViewers" placeholder="@YourHandle or UCxxxxxxxx"></textarea>
             </label>
             <p class="hint">
-              One @handle or UC… id per line. Empty = any account in this browser.
-              Server <code>viewer_allowlist</code> also enforces this and is auto-filled when this list is empty
-              (history scan works without a YouTube tab open).
+              One @handle or UC… id per line. Empty = whichever account is active.
+              Server <code>viewer_allowlist</code> also enforces this and is auto-filled when this list is empty.
+            </p>
+            <label class="field" for="historyAuthUser">History import account
+              <select id="historyAuthUser">
+                <option value="">Auto — the account YouTube is using</option>
+              </select>
+            </label>
+            <p class="hint" id="historyAccountHint">
+              Auto reads the YouTube account this browser is already signed in as.
+              Both Google accounts can stay signed in. This does not change the YouTube tab.
+              If that account is not on the viewer list, the scan tries the other signed-in accounts.
             </p>
           </div>
         </details>
@@ -160,7 +169,10 @@
             <label class="field">Server URL
               <input id="serverUrl" type="text" placeholder="http://127.0.0.1:8000" autocomplete="off" />
             </label>
-            <p class="hint">Immersion Tracker base URL (this PC or LAN host).</p>
+            <p class="hint">
+              Base URL of the running tracker. When the app is on the Mac mini, use its
+              Tailscale URL. <code>127.0.0.1:8000</code> is only for a tracker running on this PC.
+            </p>
 
             <label class="field" for="webhookSecret">
               <span class="field-label-row">
