@@ -11,7 +11,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.db.models import LogEntry
-from app.media.title_format import tadoku_title
+from app.media.title_identity import export_title
 from app.tadoku.session import ensure_session, mark_session_invalid, resolve_cookie
 
 logger = logging.getLogger(__name__)
@@ -168,12 +168,7 @@ class TadokuClient:
             return ""
 
     def to_local_payload(self, entry: LogEntry) -> dict:
-        display = tadoku_title(
-            entry.title,
-            season=entry.season,
-            episode=entry.episode,
-            content_type=entry.content_type,
-        )
+        display = export_title(entry)
         contest = self.cfg.contest
         return {
             "activity": entry.activity,
@@ -268,12 +263,7 @@ class TadokuClient:
 
     def _description_for(self, entry: LogEntry) -> str:
         """Tadoku log description (title + SxxExx). YouTube: TITLE LINK."""
-        description = tadoku_title(
-            entry.title,
-            season=entry.season,
-            episode=entry.episode,
-            content_type=entry.content_type,
-        )
+        description = export_title(entry)
         if not description.strip():
             description = entry.title or "immersion log"
         if self._is_youtube(entry):

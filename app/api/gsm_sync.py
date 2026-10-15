@@ -155,6 +155,7 @@ def _mirror(records):
     with sqlite3.connect(path, timeout=30) as con:
         con.execute("CREATE TABLE IF NOT EXISTS hub_versions (id TEXT PRIMARY KEY, counter INTEGER, writer TEXT)")
         con.execute("CREATE TABLE IF NOT EXISTS hub_aliases(alias TEXT PRIMARY KEY,game_id TEXT)")
+        con.execute("CREATE TABLE IF NOT EXISTS hub_ignored_sources(name TEXT PRIMARY KEY,discarded INTEGER DEFAULT 0)")
         con.execute("CREATE TABLE IF NOT EXISTS hub_alias_origins(id TEXT PRIMARY KEY,game_id TEXT,source_name TEXT)")
         if 'source_name' not in {row[1] for row in con.execute('PRAGMA table_info(hub_alias_origins)')}:
             con.execute('ALTER TABLE hub_alias_origins ADD COLUMN source_name TEXT')
@@ -177,6 +178,8 @@ def _mirror(records):
                 con.execute("DELETE FROM game_lines WHERE id=?", (identity,))
                 continue
             data = record["data"]
+            if con.execute("SELECT 1 FROM hub_ignored_sources WHERE name=?", (data["game_name"],)).fetchone():
+                continue
             # Reuse known game metadata by title; new scenes remain VN by default.
             game = con.execute("SELECT id FROM games WHERE title_original=? OR obs_scene_name=? LIMIT 1",
                                (data["game_name"], data["game_name"])).fetchone()

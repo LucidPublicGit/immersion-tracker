@@ -6,6 +6,8 @@ services:
     ports:
       - "8000:8000"
     environment:
+      TITLE_LOOKUP_WEB_ENABLED: ${TITLE_LOOKUP_WEB_ENABLED:-false}
+      TITLE_LOOKUP_AUTO_SUGGEST_ENABLED: ${TITLE_LOOKUP_AUTO_SUGGEST_ENABLED:-false}
       DATABASE_URL: sqlite:////app/data/immersion.db
       CONFIG_PATH: /app/config/settings.yaml
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-changeme}

@@ -111,6 +111,13 @@ def _queue_chrome(
         if full_page_link
         else ""
     )
+    from app.media.local_ai import enabled as local_ai_enabled
+    ai_lookup = (
+        '<div class="row"><button type="button" id="ql-ai-find" onclick="qlAiFind()">Find similar titles</button>'
+        '<button type="button" id="ql-ai-cancel" onclick="qlAiCancel()" hidden>Cancel lookup</button>'
+        '<span id="ql-ai-msg" class="msg" role="status" aria-live="polite"></span></div>'
+        if local_ai_enabled() else ''
+    )
     toolbar = f"""
     <p class="contest-line" id="contest"></p>
     <div id="session-banner" class="session-banner hidden" role="status"></div>
@@ -161,6 +168,7 @@ def _queue_chrome(
               <div id="ql-suggest" class="ql-suggest" hidden role="listbox"></div>
             </div>
           </div>
+          {ai_lookup}
           <div class="row ql-metrics-row">
             <div class="ql-amount-field">
               <label id="ql-amount-label" for="ql-amount">Amount</label>
@@ -374,6 +382,7 @@ def _gsm_fold_html(*, default_open: bool = False) -> str:
   </summary>
   <div class="fold-body">
     <div id="gsm-banner" class="gsm-banner" role="status">Checking GameSentenceMiner…</div>
+    <p class="gsm-hint"><button type="button" class="secondary" onclick="openGsmMatches()">Match / ignore GSM titles</button></p>
 
     <div class="gsm-stats" id="gsm-stats" hidden>
       <div class="gsm-stat">
@@ -1488,7 +1497,6 @@ def queue_page() -> str:
         title="Fetch Hoshi Reader progress from Drive now">Sync Hoshi</button>
       <button type="button" class="secondary" id="gsm-refresh-btn"
         title="Reload GameSentenceMiner pending characters">Sync GSM</button>
-      <a href="/gsm-games">Match GSM games</a>
       <button type="button" class="secondary" id="abs-refresh-btn"
         title="Reload Audiobookshelf pending minutes">Sync ABS</button>
     </div>
@@ -2130,3 +2138,8 @@ window.RACE_ME = {{ username: '{me_js}' }};
         extra_css=MOMENTUM_CSS,
     )
 
+
+
+def settings_page() -> str:
+    from app.web.settings_ui import SETTINGS_BODY, SETTINGS_CSS, SETTINGS_JS
+    return _shell('Settings · Immersion Tracker', SETTINGS_BODY+'<script>'+SETTINGS_JS+'</script>', active='settings', extra_css=SETTINGS_CSS)

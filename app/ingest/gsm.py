@@ -867,9 +867,11 @@ def _line_after_cursors(
 
 def _hub_skipped_ids(con) -> set[str]:
     """Preserve per-line exclusions when shared game associations are repaired."""
-    if 'hub_skipped_lines' not in _table_names(con):
-        return set()
-    return {str(row[0]) for row in con.execute('SELECT id FROM hub_skipped_lines')}
+    tables=_table_names(con)
+    skipped={str(row[0]) for row in con.execute('SELECT id FROM hub_skipped_lines')} if 'hub_skipped_lines' in tables else set()
+    if 'hub_ignored_sources' in tables:
+        skipped.update(str(row[0]) for row in con.execute("SELECT l.id FROM game_lines l JOIN hub_ignored_sources i ON COALESCE(l.game_name,'')=i.name"))
+    return skipped
 
 
 def _hub_original_keys(con) -> dict[str, str]:

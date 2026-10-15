@@ -98,6 +98,7 @@ class LogOut(BaseModel):
     tags: Optional[str]
     watch_ratio: Optional[float]
     tadoku_title: Optional[str] = None
+    title_identity: Optional[dict] = None
     # When the row last changed (submit/push sets this; useful for recent-sent lists)
     updated_at: Optional[datetime] = None
 

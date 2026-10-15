@@ -1,0 +1,14 @@
+# Optional native Mac worker bridge. No model/runtime runs inside the app.
+# Include after docker-compose.yml and compose.mac.yaml to enable catalog lookup.
+services:
+  immersion-tracker:
+    environment:
+      LOCAL_AI_CATALOG_ENABLED: ${LOCAL_AI_CATALOG_ENABLED:-false}
+      LOCAL_AI_CATALOG_SPOOL: /run/local-ai-catalog
+      LOCAL_AI_CATALOG_TIMEOUT_SECONDS: ${LOCAL_AI_CATALOG_TIMEOUT_SECONDS:-25}
+    volumes:
+      - type: bind
+        source: ${LOCAL_AI_CATALOG_HOST_SPOOL:?Set the native worker spool directory}
+        target: /run/local-ai-catalog
+        bind:
+          create_host_path: false

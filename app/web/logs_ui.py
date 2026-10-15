@@ -5,6 +5,7 @@ from __future__ import annotations
 from html import escape
 
 from app.web.styles import SHARED_CSS, nav_html
+from app.web.title_identity_ui import TITLE_IDENTITY_JS
 
 LOGS_CSS = """
 .page-logs { max-width: 1280px; }
@@ -275,7 +276,7 @@ button.danger.log-del-btn.is-armed {
 }
 """
 
-LOGS_JS = r"""
+LOGS_JS = TITLE_IDENTITY_JS + r"""
 const CONTENT_TYPES = ['anime','show','movie','youtube','book','audiobook','manga','visual_novel','game','podcast','study'];
 const ACTIVITIES = ['listening','reading','writing','speaking','study'];
 const UNITS = ['minutes','minutes_high_density','pages','two_column_pages','comic_pages','characters','sentences'];
@@ -463,7 +464,7 @@ function renderTable(){
       <td class="col-id col-hide-md">${e.id}</td>
       <td class="mono">${escapeHtml(fmtWhen(e.timestamp))}</td>
       <td>${escapeHtml(e.content_type||'')}</td>
-      <td class="col-title" title="${escapeHtml(tip)}">${escapeHtml(tt)}</td>
+      <td class="col-title" title="${escapeHtml(tip)}">${escapeHtml(tt)}${e.title_identity?`<div class="muted">Saved work: <a href="${escapeHtml(e.title_identity.url)}" target="_blank" rel="noopener">${escapeHtml(e.title_identity.title)}</a> · exact title for future exports</div>`:''}</td>
       <td class="ep">${escapeHtml(ep||'—')}</td>
       <td class="col-amt">${mokuroPagesHtml(e)}</td>
       <td class="col-hide-sm">${escapeHtml(e.activity||'')}</td>
@@ -473,6 +474,7 @@ function renderTable(){
       <td class="col-score col-hide-md">${e.tadoku_score_estimate!=null?Number(e.tadoku_score_estimate).toFixed(2):'—'}</td>
       <td class="col-actions">
         <button type="button" class="secondary" onclick="openEdit(${e.id})">Edit</button>
+        ${titleIdentityActionsHtml(e)}
         <button type="button" class="danger log-del-btn" data-log-id="${e.id}"
           onclick="armOrDeleteLogRow(this)" title="Delete this log">Delete</button>
       </td>

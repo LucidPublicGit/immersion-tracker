@@ -1,7 +1,9 @@
 """Shared Tadoku queue JS used by home embed and /queue page."""
 
+from app.web.title_identity_ui import TITLE_IDENTITY_JS
+
 # Single source of truth for queue list + approve/skip actions.
-QUEUE_JS = r"""
+QUEUE_JS = TITLE_IDENTITY_JS + r"""
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function epLabel(e){
   const ct=(e.content_type||'').toLowerCase();
@@ -119,6 +121,58 @@ let _qlIndexPromise=null;
 let _qlHits=[];
 let _qlActive=-1;
 let _qlSelectedKey='';
+let _qlAiController=null, _qlAiSeq=0;
+
+function qlAiCancel(){
+  _qlAiSeq++;
+  if(_qlAiController) _qlAiController.abort();
+  _qlAiController=null;
+  const find=document.getElementById('ql-ai-find'), cancel=document.getElementById('ql-ai-cancel');
+  if(find) find.disabled=false;
+  if(cancel) cancel.hidden=true;
+  const msg=document.getElementById('ql-ai-msg');
+  if(msg) msg.textContent='';
+}
+async function qlAiFind(){
+  qlAiCancel();
+  const query=(document.getElementById('ql-title')?.value||'').trim();
+  const kind=document.getElementById('ql-type')?.value||'';
+  const msg=document.getElementById('ql-ai-msg');
+  if(query.length<2||query.length>200){ if(msg) msg.textContent='Enter a title of 2–200 characters.'; return; }
+  const seq=_qlAiSeq, controller=new AbortController();
+  _qlAiController=controller;
+  document.getElementById('ql-ai-find').disabled=true;
+  document.getElementById('ql-ai-cancel').hidden=false;
+  if(msg) msg.textContent='Finding similar titles locally…';
+  const timer=setTimeout(()=>controller.abort(),31000);
+  try{
+    await qlEnsureIndex();
+    const r=await fetch('/api/catalog/suggestions',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({query,content_type:kind}),signal:controller.signal});
+    if(!r.ok) throw new Error('unavailable');
+    const data=await r.json();
+    if(seq!==_qlAiSeq||(document.getElementById('ql-title')?.value||'').trim()!==query||document.getElementById('ql-type')?.value!==kind) return;
+    if(!data.available){
+      if(msg) msg.textContent=data.reason==='scope_unverified'
+        ? 'Use normal search for a specific season or edition.' : 'Local AI unavailable. Normal title search still works.';
+      return;
+    }
+    // Normal search stays first; AI can add rows, never select one or rewrite it.
+    const hits=qlSearch(query), seen=new Set(hits.map(h=>h.c.series_key));
+    let added=0;
+    for(const row of data.suggestions||[]){
+      const c=_qlCatalog.find(c=>c.series_key===row.series_key&&c.content_type===kind&&c.display_title===row.display_title);
+      if(c&&!seen.has(c.series_key)){hits.push({c,p:_qlProgressByKey[c.series_key],ai:true});seen.add(c.series_key);added++;}
+    }
+    qlPaintSuggest(hits,true);
+    if(msg) msg.textContent=added?'Similar titles added. Choose a row; check its title and scope.':'No additional close matches. Use normal title search.';
+  }catch(e){
+    if(seq===_qlAiSeq&&msg) msg.textContent='Lookup unavailable. Normal title search still works.';
+  }finally{
+    clearTimeout(timer);
+    if(seq===_qlAiSeq){_qlAiController=null;document.getElementById('ql-ai-find').disabled=false;document.getElementById('ql-ai-cancel').hidden=true;}
+  }
+}
 
 function qlNorm(s){
   return String(s||'').toLowerCase().normalize('NFKC').replace(/[\s\-_]+/g,' ').trim();
@@ -177,6 +231,8 @@ function qlApplyTypeFields(opts){
   }
 }
 function qlOnTypeChange(){
+  qlAiCancel();
+  qlHideSuggest();
   qlApplyTypeFields({applyDefaults:true});
   const ct=document.getElementById('ql-type')?.value||'';
   const unit=qlUnitFor(ct);
@@ -298,17 +354,17 @@ async function qlLastLog(seriesKey){
     return Array.isArray(rows)&&rows.length?rows[0]:null;
   }catch(e){ return null; }
 }
-function qlPaintSuggest(hits){
+function qlPaintSuggest(hits, aiLookup=false){
   const box=document.getElementById('ql-suggest');
   if(!box) return;
   _qlHits=hits;
-  _qlActive=hits.length?0:-1;
+  _qlActive=hits.length&&!aiLookup?0:-1;
   if(!hits.length){ qlHideSuggest(); return; }
   box.hidden=false;
   box.innerHTML=hits.map((h,i)=>{
     const c=h.c, p=h.p;
     const pos=p?(p.current_display||p.progress_label||''):'';
-    const sub=[c.content_type,c.series_key,pos].filter(Boolean).join(' · ');
+    const sub=[h.ai?'Similar title':null,c.content_type,c.series_key,pos].filter(Boolean).join(' · ');
     return `<button type="button" role="option" class="ql-opt${i===_qlActive?' is-active':''}" data-i="${i}">`+
       `<span class="ql-opt-title">${escapeHtml(c.display_title)}</span>`+
       `<span class="ql-opt-sub">${escapeHtml(sub)}</span></button>`;
@@ -318,6 +374,7 @@ function qlPaintSuggest(hits){
   });
 }
 async function qlOnTitleInput(){
+  qlAiCancel();
   const raw=document.getElementById('ql-title')?.value||'';
   // free typing clears pinned series until a suggestion is chosen again
   if(_qlSelectedKey){
@@ -352,6 +409,7 @@ function qlOnTitleKey(ev){
   }
 }
 async function qlPick(i){
+  qlAiCancel();
   const hit=_qlHits[i];
   if(!hit) return;
   const c=hit.c;
@@ -370,6 +428,7 @@ async function qlPick(i){
 
   // Prefer last log's amount; unit always from type
   const last=await qlLastLog(c.series_key);
+  if(_qlSelectedKey!==c.series_key) return;
   let amount=(last&&last.amount!=null)?last.amount:defs.amount;
   const amtEl=document.getElementById('ql-amount');
   if(amtEl){
@@ -700,6 +759,12 @@ async function clearTadokuLogin(){
   setMsg('Tadoku login cleared');
   await loadSettings(false);
 }
+function openGsmMatches(){
+  const dialog=document.createElement('dialog');dialog.style.cssText='width:95%;max-width:1000px;max-height:90vh;padding:1rem';
+  const close=document.createElement('button');close.textContent='Close';close.onclick=()=>dialog.close();
+  const frame=document.createElement('iframe');frame.src='/gsm-games?embedded=true';frame.title='Match or ignore GSM source titles';frame.style.cssText='width:100%;height:75vh;border:0';
+  dialog.append(close,frame);document.body.append(dialog);dialog.addEventListener('close',()=>{dialog.remove();loadGsmPanel();});dialog.showModal();
+}
 async function loadQueue(){
   const root=document.getElementById('groups');
   if(!root) return;
@@ -769,7 +834,7 @@ async function loadQueue(){
     const tb=div.querySelector('tbody');
     for(const e of items){
       const tr=document.createElement('tr');
-      const tt=e.title||e.tadoku_title||'';
+      const tt=e.title_identity?e.tadoku_title:(e.title||e.tadoku_title||'');
       const mid=yt
         ? escapeHtml((e.series_key||'').replace(/^yt:/,'')||'—')
         : escapeHtml(epLabel(e));
@@ -785,7 +850,7 @@ async function loadQueue(){
       tr.innerHTML=`
         <td class="row-id">${e.id}</td>
         <td>${(e.timestamp||'').slice(0,19)}</td>
-        <td title="${escapeHtml(e.tadoku_title||tt)}">${escapeHtml(tt)}${failHtml}</td>
+        <td title="${escapeHtml(e.tadoku_title||tt)}">${escapeHtml(tt)}${e.title_identity?`<div class="muted">Original: ${escapeHtml(e.title)} · <a href="${escapeHtml(e.title_identity.url)}" target="_blank" rel="noopener">${escapeHtml(e.title_identity.provider)} ${escapeHtml(e.title_identity.provider_id)}</a></div>`:''}${failHtml}${titleIdentityActionsHtml(e)}</td>
         <td class="ep">${mid}</td>
         <td>${mokuroPagesHtml(e)}</td>
         <td>${e.tadoku_score_estimate!=null?Number(e.tadoku_score_estimate).toFixed(2):'—'}</td>
@@ -807,6 +872,7 @@ async function loadQueue(){
     }
     root.appendChild(div);
   }
+  autoSuggestQueueTitles(data);
 }
 const QUEUE_STATUSES=['pending','ready','failed','skipped','pushed','n/a'];
 const QUEUE_MODES=['auto','pending','never'];
@@ -928,7 +994,7 @@ async function loadRecentLogs(){
       <td class="row-id">${e.id}</td>
       <td class="sent-at">${escapeHtml(sent)}</td>
       <td>${escapeHtml(logged)}</td>
-      <td>${titleCell}</td>
+      <td>${titleCell}${e.title_identity?`<div class="muted">Saved for future exports: ${escapeHtml(e.title_identity.title)}</div>`:''}${titleIdentityActionsHtml(e)}</td>
       <td class="ep">${escapeHtml(epLabel(e))}</td>
       <td>${mokuroPagesHtml(e)}</td>
       <td>${e.tadoku_score_estimate!=null?Number(e.tadoku_score_estimate).toFixed(2):'—'}</td>
@@ -956,6 +1022,7 @@ async function loadRecentLogs(){
   root.querySelectorAll('.log-del-btn').forEach(btn=>{
     btn.addEventListener('click', (ev)=>{ ev.preventDefault(); ev.stopPropagation(); armOrDeleteLog(btn); });
   });
+  autoSuggestQueueTitles(data);
 }
 /** First click arms Confirm; second click DELETEs. Auto-disarms after a few seconds. */
 function armOrDeleteLog(btn){

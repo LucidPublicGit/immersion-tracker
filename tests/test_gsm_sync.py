@@ -267,3 +267,90 @@ def test_late_skip_on_original_game_still_excludes_remapped_history(matches,monk
     preview=gsm.build_preview(deduplicate=False)
     # The unchanged two-character seed line is below the Japanese minimum.
     assert preview['total_characters']==0
+
+
+def source_policy(client,name,action):
+    body={'name':name,'action':action}
+    preview=client.post('/api/gsm/game-matches/source-preview',json=body)
+    assert preview.status_code==200,preview.text
+    return client.post('/api/gsm/game-matches/source-policy',json={**body,'revision':preview.json()['revision']})
+
+
+def test_ignore_unnamed_source_excludes_local_and_future_history(matches):
+    from app.ingest import gsm
+    client,_,cipher,path=matches
+    with sqlite3.connect(path) as con:
+        con.execute("INSERT INTO game_lines VALUES('garbage','','ごみ','ja',1400,'[]',1400,'','',1400,'')")
+    source=next(s for s in client.get('/api/gsm/game-matches').json()['sources'] if s['name']=='')
+    assert 'without a game name' in source['origin'] and source['lines']==1
+    assert source_policy(client,'','ignore').status_code==200
+    with gsm._connect_ro(path) as con:assert 'garbage' in gsm._hub_skipped_ids(con)
+    incoming=record('garbage-new');incoming['data']['game_name']=''
+    assert exchange(matches,[event(cipher,incoming)]).status_code==200
+    with sqlite3.connect(path) as con:
+        assert con.execute("SELECT count(*) FROM game_lines WHERE id='garbage-new'").fetchone()[0]==0
+        assert con.execute("SELECT count(*) FROM game_lines WHERE id='existing'").fetchone()[0]==1
+    assert source_policy(client,'','restore').status_code==200
+    with gsm._connect_ro(path) as con:assert 'garbage' not in gsm._hub_skipped_ids(con)
+
+
+def test_discard_source_keeps_versions_and_other_games(matches):
+    client,_,cipher,path=matches
+    incoming=record('bad-line');incoming['data']['game_name']='Bad source'
+    change=event(cipher,incoming)
+    assert exchange(matches,[change]).status_code==200
+    assert source_policy(client,'Bad source','discard').status_code==200
+    with sqlite3.connect(path) as con:
+        assert con.execute("SELECT count(*) FROM game_lines WHERE game_name='Bad source'").fetchone()[0]==0
+        assert con.execute("SELECT count(*) FROM hub_versions WHERE id='bad-line'").fetchone()[0]==1
+        assert con.execute("SELECT count(*) FROM game_lines WHERE id='existing'").fetchone()[0]==1
+    assert exchange(matches,[change]).status_code==200
+    later=record('bad-line',[2,'pc-a']);later['data']['game_name']='Bad source'
+    assert exchange(matches,[event(cipher,later)]).status_code==200
+    with sqlite3.connect(path) as con:assert con.execute("SELECT count(*) FROM game_lines WHERE id='bad-line'").fetchone()[0]==0
+    source=next(s for s in client.get('/api/gsm/game-matches').json()['sources'] if s['name']=='Bad source')
+    assert source['ignored'] and source['discarded'] and source['lines']==0
+
+
+def test_source_policy_stale_preview_and_pending_export_blocked(matches,monkeypatch):
+    from app.ingest import gsm
+    client,_,_,path=matches
+    body={'name':'STEINS GATE','action':'discard'}
+    preview=client.post('/api/gsm/game-matches/source-preview',json=body).json()
+    with sqlite3.connect(path) as con:con.execute("DELETE FROM game_lines WHERE id='alias-pending'")
+    assert client.post('/api/gsm/game-matches/source-policy',json={**body,'revision':preview['revision']}).status_code==409
+    monkeypatch.setattr(gsm,'_load_pending_export',lambda db:{'pending':True})
+    assert source_policy(client,'STEINS GATE','ignore').status_code==409
+
+
+def test_gsm_ai_is_optional_and_uses_only_stored_games(matches,monkeypatch):
+    from app.media import local_ai
+    client,_,_,path=matches
+    monkeypatch.setenv('LOCAL_AI_CATALOG_ENABLED','false')
+    assert client.post('/api/gsm/game-matches/suggestions',json={'name':'STEINS GATE'}).json()['reason']=='disabled'
+    monkeypatch.setenv('LOCAL_AI_CATALOG_ENABLED','true')
+    async def compare(query,kind,rows,disconnected):
+        assert kind=='game' and {r['id'] for r in rows}=={'old-game','original-game'}
+        assert query=='STEINS GATE'
+        return {'available':True,'suggestions':[{'series_key':'old-game','display_title':'STEINS GATE','content_type':'game'}]}
+    monkeypatch.setattr(local_ai,'suggestions',compare)
+    result=client.post('/api/gsm/game-matches/suggestions',json={'name':'STEINS GATE'})
+    assert result.status_code==200 and result.json()['suggestions'][0]['series_key']=='old-game'
+    with sqlite3.connect(path) as con:assert con.execute('SELECT count(*) FROM hub_aliases').fetchone()[0]==0
+
+
+def test_exact_game_suggestion_rechecked_before_acceptance(matches):
+    client,_,_,path=matches
+    r=client.post('/api/gsm/game-matches/accept-suggestion',json={'name':'STEINS GATE','game_id':'old-game'})
+    assert r.status_code==200
+    with sqlite3.connect(path) as con:
+        con.execute("INSERT INTO games VALUES('ambiguous','STEINS;GATE','Other scene','Visual Novel')")
+    assert client.post('/api/gsm/game-matches/accept-suggestion',json={'name':'STEINS GATE','game_id':'old-game'}).status_code==409
+
+
+def test_rounded_similarity_is_not_an_exact_match():
+    from app.api.gsm_games import _suggest
+    source='A long title with many repeated words and a final edition A'
+    games=[{'id':'one','title':source[:-1]+'B','names':[source[:-1]+'B']}]
+    rows=_suggest(source,games)
+    assert rows and rows[0]['exact'] is False

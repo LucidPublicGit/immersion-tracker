@@ -4,11 +4,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+import httpx
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from pydantic import Field
 
 from app.api.deps import verify_webhook_secret
 from app.api.schemas import (
@@ -70,15 +73,15 @@ def health():
 
 
 def _log_out(entry) -> LogOut:
-    from app.media.title_format import tadoku_title
+    from app.media.title_identity import export_title, mapping_for
 
     data = LogOut.model_validate(entry)
-    data.tadoku_title = tadoku_title(
-        entry.title,
-        season=entry.season,
-        episode=entry.episode,
-        content_type=entry.content_type,
-    )
+    data.tadoku_title = export_title(entry)
+    identity = mapping_for(entry)
+    if identity:
+        data.title_identity = {'title': identity.canonical_title, 'provider': identity.provider,
+                               'provider_id': identity.provider_id, 'url': identity.provider_url,
+                               'original_title': identity.original_title}
     return data
 
 
@@ -1057,6 +1060,30 @@ def list_catalog(db: Session = Depends(get_db)):
     return db.query(CatalogItem).order_by(CatalogItem.series_key).all()
 
 
+class CatalogSuggestionQuery(BaseModel):
+    query: str = Field(min_length=2, max_length=200)
+    content_type: str = Field(min_length=1, max_length=64)
+
+
+@router.post('/catalog/suggestions')
+async def catalog_suggestions(body: CatalogSuggestionQuery, request: Request, db: Session = Depends(get_db)):
+    from app.media.local_ai import enabled, suggestions
+    if not enabled():
+        return {'available': False, 'reason': 'disabled', 'suggestions': []}
+    rows = db.query(CatalogItem).filter(CatalogItem.content_type == body.content_type).order_by(CatalogItem.series_key).limit(1001).all()
+    candidates = [{'id': row.series_key, 'title': row.display_title,
+                   'content_type': row.content_type, 'aliases': parse_aliases(row.aliases)} for row in rows]
+    result = await suggestions(body.query.strip(), body.content_type, candidates, request.is_disconnected)
+    if result['available']:
+        # Reject results if the live source changed while inference was running.
+        current = db.query(CatalogItem).filter(CatalogItem.content_type == body.content_type).populate_existing().order_by(CatalogItem.series_key).limit(1001).all()
+        now = [{'id': row.series_key, 'title': row.display_title,
+                'content_type': row.content_type, 'aliases': parse_aliases(row.aliases)} for row in current]
+        if now != candidates:
+            return {'available': False, 'reason': 'stale', 'suggestions': []}
+    return result
+
+
 @router.post("/catalog", response_model=CatalogOut, status_code=201)
 def create_catalog(body: CatalogCreate, db: Session = Depends(get_db)):
     from app.tadoku.rules import resolve_activity_unit
@@ -1776,3 +1803,156 @@ def progress_fixup(body: ProgressFixupBody, db: Session = Depends(get_db)):
 
     result["progress"] = _progress_snapshot(db, auto_finish=True)
     return result
+
+
+class TitlePreviewBody(BaseModel):
+    provider_reference: str = Field(default='', max_length=160)
+    query: str = Field(default='', max_length=160)
+    use_local_ai: bool = False
+
+
+class TitleConfirmBody(BaseModel):
+    token: str = Field(max_length=24000)
+    provider_id: str = Field(min_length=1, max_length=128)
+
+
+@router.get('/title-identification/settings')
+def title_identification_settings():
+    from app.media import local_ai, title_identity
+    return {'web_enabled': title_identity.web_enabled(), 'local_ai_enabled': local_ai.enabled(),
+            'auto_suggest_enabled': title_identity.auto_enabled(),
+            'supported_types': title_identity.SUPPORTED_TYPES,
+            'provider_by_type': {kind: title_identity.provider_for(kind) for kind in title_identity.SUPPORTED_TYPES}}
+
+
+@router.post('/logs/{log_id}/title-preview')
+async def title_preview(log_id: int, body: TitlePreviewBody, request: Request, db: Session = Depends(get_db)):
+    from app.media import local_ai, title_identity as identity
+    from app.media.ai_settings import record
+    entry = db.get(LogEntry, log_id)
+    if not entry:
+        raise HTTPException(404, 'Log not found')
+    if not identity.web_enabled():
+        return {'available': False, 'reason': 'web_disabled', 'candidates': []}
+    if entry.content_type not in identity.SUPPORTED_TYPES:
+        return {'available': False, 'reason': 'unsupported_medium', 'candidates': []}
+    query = body.query.strip() or identity.lookup_hint(entry.title)
+    if not query:
+        raise HTTPException(422, 'Enter a title to search')
+    original_key = identity.source_key(entry)
+    kind = entry.content_type
+    provider_id = None
+    if body.provider_reference.strip():
+        try:
+            provider_id = identity.parse_provider_reference(body.provider_reference, kind)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+    record('provider', f'{identity.provider_for(kind)} API lookup for {kind} log #{log_id}. Local model not involved in this lookup.')
+    try:
+        found = await identity.provider_candidates(query, kind, provider_id) if provider_id is not None else await identity.provider_candidates(query, kind)
+        candidates = identity.annotate_candidates(query, found)
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+        record('provider', f'Provider lookup for log #{log_id} failed; source title unchanged.')
+        return {'available': False, 'reason': 'provider_unavailable', 'candidates': []}
+    record('provider', f'Log #{log_id}: {len(candidates)} provider candidates, {sum(bool(c.get("text_match")) for c in candidates)} title/alias matches. '+('Candidates: '+', '.join(c['title'][:80] for c in candidates[:3]) if candidates else 'No match.'))
+    ai = {'available': False, 'reason': 'not_requested', 'suggestions': []}
+    if body.use_local_ai and candidates:
+        rows = [{'id': c['provider_id'], 'title': c['title'], 'aliases': c['aliases'], 'content_type': kind} for c in candidates]
+        ai = await local_ai.suggestions(query, kind, rows, request.is_disconnected)
+    db.refresh(entry)
+    if identity.source_key(entry) != original_key:
+        raise HTTPException(409, 'Source changed; search again')
+    suggested = [r['series_key'] for r in ai.get('suggestions', [])]
+    return {'available': True, 'query': query, 'original_title': entry.title,
+            'provider': identity.provider_for(kind),
+            'lookup_mode': 'provider_id' if provider_id is not None else 'search', 'provider_id': provider_id,
+            'candidates': candidates, 'suggested_ids': suggested, 'ai_reason': ai.get('reason'),
+            'token': identity.sign_preview(entry, candidates)}
+
+
+@router.post('/logs/{log_id}/title-identity', response_model=LogOut)
+def confirm_title_identity(log_id: int, body: TitleConfirmBody, db: Session = Depends(get_db)):
+    from app.db.models import TitleIdentity
+    from app.media import title_identity as identity
+    entry = db.get(LogEntry, log_id)
+    if not entry:
+        raise HTTPException(404, 'Log not found')
+    try:
+        candidate = identity.verify_preview(entry, body.token, body.provider_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    key = identity.source_key(entry)
+    mapping = db.get(TitleIdentity, key)
+    if mapping is None:
+        mapping = TitleIdentity(source_key=key, source=entry.source, content_type=entry.content_type,
+                                original_title=entry.title)
+        db.add(mapping)
+    mapping.canonical_title = candidate['title']
+    mapping.provider = candidate.get('provider', 'anilist')
+    mapping.provider_id = candidate['provider_id']
+    mapping.provider_url = candidate['provider_url']
+    mapping.confirmed_at = utcnow()
+    db.commit()
+    from app.media.ai_settings import record
+    record('mapping', f'Accepted title for log #{log_id}: {mapping.canonical_title}. Saved source mapping; already-sent Tadoku logs unchanged.')
+    return _log_out(entry)
+
+
+@router.delete('/logs/{log_id}/title-identity', response_model=LogOut)
+def remove_title_identity(log_id: int, db: Session = Depends(get_db)):
+    from app.media.title_identity import mapping_for
+    entry = db.get(LogEntry, log_id)
+    if not entry:
+        raise HTTPException(404, 'Log not found')
+    mapping = mapping_for(entry)
+    if mapping:
+        db.delete(mapping)
+        db.commit()
+    return _log_out(entry)
+
+
+class LocalModelSettings(BaseModel):
+    model_path: str = Field(min_length=1, max_length=1024)
+    minimum_similarity: float = Field(ge=-1, le=1)
+    query_prefix: str = Field(max_length=100)
+    document_prefix: str = Field(max_length=100)
+    model_config = {'extra': 'forbid'}
+
+
+class LocalAISettingsBody(BaseModel):
+    local_ai_enabled: bool
+    web_enabled: bool
+    auto_suggest_enabled: bool
+    worker_config: Optional[LocalModelSettings] = None
+    expected_worker_config: Optional[str] = Field(default=None, max_length=64)
+    model_config = {'extra': 'forbid'}
+
+
+@router.get('/settings/local-ai')
+def local_ai_settings():
+    from app.media import ai_settings
+    return {'options': ai_settings.options(), 'worker': ai_settings.worker_status(),
+            'activity': ai_settings.activity(), 'activity_scope': 'App activity since restart; native worker retains its last 30 jobs.'}
+
+
+@router.put('/settings/local-ai')
+async def save_local_ai_settings(body: LocalAISettingsBody):
+    from app.media import ai_settings
+    if body.worker_config is not None:
+        status = ai_settings.worker_status()
+        if not status['online'] or not status['settings_supported']:
+            raise HTTPException(503, 'Native worker is offline or does not support settings. App switches can be saved separately.')
+        if not body.expected_worker_config:
+            raise HTTPException(409, 'Reload current model settings before saving.')
+        patch = body.worker_config.model_dump()
+        patch['enabled'] = body.local_ai_enabled
+        try:
+            await ai_settings.configure_worker(patch, body.expected_worker_config)
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(409, str(exc) if isinstance(exc, ValueError) else 'Worker settings could not be saved.') from None
+    try:
+        ai_settings.save_options(body.model_dump(include={'local_ai_enabled','web_enabled','auto_suggest_enabled'}))
+    except (OSError, ValueError):
+        raise HTTPException(503, 'App settings could not be saved.') from None
+    ai_settings.record('settings', 'Local AI and title lookup settings saved. No inference was started.')
+    return local_ai_settings()

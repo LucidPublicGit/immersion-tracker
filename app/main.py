@@ -25,6 +25,7 @@ from app.web.pages import (
     queue_page,
     race_page,
     reading_page,
+    settings_page,
 )
 from app.workers.scheduler import start_scheduler, stop_scheduler
 
@@ -106,9 +107,9 @@ def index():
 
 
 @app.get("/gsm-games", response_class=HTMLResponse)
-def gsm_games_page():
+def gsm_games_page(embedded: bool = False):
     from app.web.gsm_games_ui import game_matches_page
-    return game_matches_page()
+    return game_matches_page(embedded=embedded)
 
 
 @app.get("/queue", response_class=HTMLResponse)
@@ -143,3 +144,8 @@ def race_ui():
     return race_page()
 
 
+
+
+@app.get('/settings', response_class=HTMLResponse)
+def settings_ui():
+    return settings_page()

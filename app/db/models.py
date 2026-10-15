@@ -232,3 +232,18 @@ class MediaMetadata(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class TitleIdentity(Base):
+    """User-confirmed work identity scoped to an exact source/type/raw-title tuple."""
+    __tablename__ = "title_identities"
+
+    source_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source: Mapped[str] = mapped_column(String(64))
+    content_type: Mapped[str] = mapped_column(String(64))
+    original_title: Mapped[str] = mapped_column(String(512))
+    canonical_title: Mapped[str] = mapped_column(String(512))
+    provider: Mapped[str] = mapped_column(String(32), default="anilist")
+    provider_id: Mapped[str] = mapped_column(String(128))
+    provider_url: Mapped[str] = mapped_column(String(512))
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

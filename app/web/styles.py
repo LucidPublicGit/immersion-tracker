@@ -3022,7 +3022,7 @@ def nav_html(
         return ' class="active"' if active == name else ""
 
     # Job-shaped nav: Inbox · Logs · Race · More (Progress at /progress, hidden from topbar)
-    more_names = {"reading", "catalog", "home"}
+    more_names = {"reading", "catalog", "home", "settings"}
     more_cls = ' class="nav-more active"' if active in more_names else ' class="nav-more"'
 
     sheets_btn = ""
@@ -3064,6 +3064,7 @@ def nav_html(
         <a href="/"{cls("home")} role="menuitem">Dashboard</a>
         <a href="/reading"{cls("reading")} role="menuitem">Reading</a>
         <a href="/catalog"{cls("catalog")} role="menuitem">Catalog</a>
+        <a href="/settings"{cls("settings")} role="menuitem">Settings</a>
         <a href="/api/backup" role="menuitem" download>Backup DB</a>
         <a href="/docs" target="_blank" rel="noopener" role="menuitem">API docs ↗</a>
       </div>

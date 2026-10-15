@@ -3,6 +3,12 @@ services:
   immersion-tracker:
     environment:
       FORWARDED_ALLOW_IPS: "127.0.0.1,172.18.0.1,172.30.50.2"
+      # Reach NAS HTTP APIs through the existing userspace Tailscale node.
+      # Keep native host/local services on their existing direct paths.
+      HTTP_PROXY: http://tailscale:1055
+      http_proxy: http://tailscale:1055
+      NO_PROXY: ${APP_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,host.lima.internal,immersion-tracker,tautulli,tailscale}
+      no_proxy: ${APP_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,host.lima.internal,immersion-tracker,tautulli,tailscale}
     ports: !override
       - "127.0.0.1:8000:8000"
     volumes:
@@ -25,6 +31,8 @@ services:
     hostname: immersion-tracker-gateway
     environment:
       TS_BOOT_TIMEOUT: "30m"
+      # Internal Docker listener only; no host port is published.
+      TS_OUTBOUND_HTTP_PROXY_LISTEN: ":1055"
     networks:
       default: {}
       apps:
