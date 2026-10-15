@@ -353,9 +353,17 @@ function mokuroPagesHtml(e){
   if((e.source||'')!=='mokuro') return `${e.amount} <span class="muted">${escapeHtml(e.unit||'')}</span>`;
   const notes=String(e.notes||'');
   const m=notes.match(/pages\s+(\d+)\s*→\s*(\d+)\s*\(\+(\d+)\)/i);
+  const totalM=notes.match(/(?:^|[;\s])total=(\d+)/i);
   const done=/\bcompleted\b/i.test(notes);
   const logged=Number(e.amount)||(m?Number(m[3]):0);
   const end=m?Number(m[2]):0;
+  const total=totalM?Number(totalM[1]):0;
+  if(total>0){
+    const cur=end>0?end:logged;
+    const ok=done||cur>=total;
+    const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';
+    return `<span class="mokuro-pages${ok?' done':''}" title="Current page / volume pages">${cur}/${total}${check}</span>`;
+  }
   if(done && end>0){
     const ok=logged>=end;
     const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';

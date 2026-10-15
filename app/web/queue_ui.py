@@ -58,9 +58,17 @@ function mokuroPagesHtml(e){
   if((e.source||'')!=='mokuro') return `${e.amount} ${escapeHtml(e.unit||'')}`;
   const notes=String(e.notes||'');
   const m=notes.match(/pages\s+(\d+)\s*→\s*(\d+)\s*\(\+(\d+)\)/i);
+  const totalM=notes.match(/(?:^|[;\s])total=(\d+)/i);
   const done=/\bcompleted\b/i.test(notes);
   const logged=Number(e.amount)||(m?Number(m[3]):0);
   const end=m?Number(m[2]):0;
+  const total=totalM?Number(totalM[1]):0;
+  if(total>0){
+    const cur=end>0?end:logged;
+    const ok=done||cur>=total;
+    const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';
+    return `<span class="mokuro-pages${ok?' done':''}" title="Current page / volume pages">${cur}/${total}${check}</span>`;
+  }
   if(done && end>0){
     const ok=logged>=end;
     const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';
@@ -827,6 +835,7 @@ async function loadQueue(){
       <table class="queue-table">
         <thead><tr>
           <th>ID</th><th>When</th><th>Title</th><th>${posHead}</th><th>Amt</th><th>Score</th>
+          <th class="col-mode">Mode</th>
           <th class="col-actions-q">Review</th>
         </tr></thead>
         <tbody></tbody>
@@ -838,14 +847,13 @@ async function loadQueue(){
       const mid=yt
         ? escapeHtml((e.series_key||'').replace(/^yt:/,'')||'—')
         : escapeHtml(epLabel(e));
-      const statusSel=statusSelectHtml(e.id, e.tadoku_status);
       const modeSel=modeSelectHtml(e.id, e.tadoku_mode);
       const failDetail=tadokuFailFromNotes(e.notes);
       const isFailed=(e.tadoku_status||'')==='failed';
       if(isFailed) tr.classList.add('row-failed');
       tr.dataset.logId=String(e.id);
       const failHtml=isFailed
-        ? `<div class="q-fail" title="${escapeHtml(failDetail||'Submit failed')}">${escapeHtml(failDetail||'Submit failed — open Edit / Logs for full notes')}</div>`
+        ? `<div class="q-fail" title="${escapeHtml(failDetail||'Submit failed')}">${escapeHtml(failDetail||'Submit failed — open Logs for full notes')}</div>`
         : '';
       tr.innerHTML=`
         <td class="row-id">${e.id}</td>
@@ -854,18 +862,11 @@ async function loadQueue(){
         <td class="ep">${mid}</td>
         <td>${mokuroPagesHtml(e)}</td>
         <td>${e.tadoku_score_estimate!=null?Number(e.tadoku_score_estimate).toFixed(2):'—'}</td>
+        <td class="col-mode"><span class="m-label">Mode</span>${modeSel}</td>
         <td class="col-actions-q">
           <div class="row-review">
             <button type="button" class="approve" onclick="act(${e.id},'approve')">Approve</button>
             <button type="button" class="skip" onclick="act(${e.id},'skip')">Skip</button>
-            <details class="row-config">
-              <summary title="Status &amp; mode">Edit</summary>
-              <div class="row-config-body">
-                <label>Status ${statusSel}</label>
-                <label>Mode ${modeSel}</label>
-                ${isFailed&&failDetail?`<p class="q-fail-detail">${escapeHtml(failDetail)}</p>`:''}
-              </div>
-            </details>
           </div>
         </td>`;
       tb.appendChild(tr);
@@ -874,24 +875,14 @@ async function loadQueue(){
   }
   autoSuggestQueueTitles(data);
 }
-const QUEUE_STATUSES=['pending','ready','failed','skipped','pushed','n/a'];
 const QUEUE_MODES=['auto','pending','never'];
-function statusSelectHtml(id, selected){
-  const sel=selected||'pending';
-  const opts=QUEUE_STATUSES.map(s=>
-    `<option value="${s}"${s===sel?' selected':''}>${s}</option>`).join('');
-  return `<select class="status-select badge-select status-${escapeHtml(sel)}"
-    data-log-id="${id}" data-field="tadoku_status" data-last="${escapeHtml(sel)}"
-    onfocus="this.dataset.last=this.value"
-    onchange="patchQueueField(${id},'tadoku_status',this.value,this)"
-    title="Tadoku status (saved to DB / Sheets)">${opts}</select>`;
-}
 function modeSelectHtml(id, selected){
   const sel=selected||'pending';
   const opts=QUEUE_MODES.map(s=>
     `<option value="${s}"${s===sel?' selected':''}>${s}</option>`).join('');
   return `<select class="mode-select badge-select"
     data-log-id="${id}" data-field="tadoku_mode" data-last="${escapeHtml(sel)}"
+    aria-label="Mode"
     onfocus="this.dataset.last=this.value"
     onchange="patchQueueField(${id},'tadoku_mode',this.value,this)"
     title="Tadoku mode for this log + series catalog (future episodes inherit)">${opts}</select>`;
@@ -1110,7 +1101,8 @@ async function batchSkip(ids){
 async function processAll(){
   const r=await fetch('/api/tadoku/process',{method:'POST'});
   const j=await r.json();
-  setMsg(`pushed=${j.pushed} failed=${j.failed}${formatProcessFailures(j.results)}`);
+  const wait=Number(j.waiting)||0;
+  setMsg(`pushed=${j.pushed} failed=${j.failed}${wait?` waiting=${wait} (manga volume unfinished)`:''}${formatProcessFailures(j.results)}`);
   loadQueue();
   loadRecentLogs();
   if(typeof refreshMetrics==='function') refreshMetrics();

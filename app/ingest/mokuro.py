@@ -3,7 +3,9 @@ Mokuro Reader Google Drive progress → manga page logs.
 
 Reads ``mokuro-reader/volume-data.json`` (same Drive auth as Hoshi).
 Logs positive page deltas. First sight of a volume is a baseline (no dump).
-Tadoku mode is always pending unless yaml tadoku_default says otherwise.
+Tadoku mode is pending unless yaml ``tadoku_default`` says otherwise.
+``series.json`` page counts are stored on the open log as ``total=N``.
+Auto submit waits for Mokuro to mark that volume finished; Approve does not.
 """
 
 from __future__ import annotations
@@ -148,6 +150,16 @@ def _ref_pages(source_ref: Optional[str]) -> Optional[int]:
         return None
 
 
+def _page_count(rec: Optional[dict[str, Any]]) -> Optional[int]:
+    if not rec:
+        return None
+    try:
+        total = int(rec.get("page_count") or 0)
+    except (TypeError, ValueError):
+        return None
+    return total if total > 0 else None
+
+
 def _volume_notes(
     rec: dict[str, Any],
     *,
@@ -157,6 +169,9 @@ def _volume_notes(
     chars: int,
 ) -> str:
     notes = f"pages {start}→{pages} (+{amount})"
+    total = _page_count(rec)
+    if total:
+        notes += f"; total={total}"
     if chars:
         notes += f"; chars={chars}"
     if rec.get("completed"):
@@ -165,6 +180,150 @@ def _volume_notes(
     if vol:
         notes += f"; volume={vol}"
     return notes
+
+
+def _pushed_volume_pages(db: Session, volume_id: str) -> int:
+    prefix = f"mokuro:{volume_id}:"
+    rows = (
+        db.query(LogEntry)
+        .filter(
+            LogEntry.source == SOURCE,
+            LogEntry.source_ref.startswith(prefix),
+            LogEntry.tadoku_status == "pushed",
+        )
+        .all()
+    )
+    return sum(int(float(row.amount or 0)) for row in rows)
+
+
+def parse_series_page_counts(raw: Any) -> dict[str, int]:
+    """volume_uuid → page_count from one Mokuro series.json."""
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    else:
+        data = raw
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, int] = {}
+    volumes = data.get("volumes")
+    if not isinstance(volumes, list):
+        return out
+    for vol in volumes:
+        if not isinstance(vol, dict):
+            continue
+        vid = str(vol.get("volume_uuid") or vol.get("volume_id") or "").strip()
+        try:
+            total = int(vol.get("page_count") or 0)
+        except (TypeError, ValueError):
+            continue
+        if vid and total > 0:
+            out[vid] = total
+    return out
+
+
+def _apply_page_counts(
+    volumes: dict[str, dict[str, Any]], counts: dict[str, int]
+) -> None:
+    for volume_id, rec in volumes.items():
+        total = counts.get(volume_id)
+        if total:
+            rec["page_count"] = total
+
+
+def fetch_page_counts(
+    *,
+    client=None,
+    folder_id: str = "",
+    folder_name: str = "mokuro-reader",
+) -> dict[str, int]:
+    """Map volume_uuid → page_count from each series folder's series.json.
+
+    volume-data.json has the reader position, not the volume length. Failures
+    here must not fail the progress poll; the caller logs and continues.
+    """
+    from app.ingest.hoshi_drive import FOLDER_MIME, HoshiDriveClient, HoshiDriveError
+
+    drive = client or HoshiDriveClient()
+    try:
+        root_id = drive.find_root_folder(folder_id=folder_id, folder_name=folder_name)
+    except HoshiDriveError as exc:
+        logger.warning("mokuro: page counts skipped, root not found: %s", exc)
+        return {}
+
+    rid = root_id.replace("'", "\\'")
+    try:
+        folders = drive.list_files(
+            f"trashed=false and mimeType='{FOLDER_MIME}' and '{rid}' in parents",
+            fields="files(id, name, parents)",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mokuro: series folder list failed: %s", exc)
+        return {}
+    folder_ids = {f.id for f in folders}
+    if not folder_ids:
+        return {}
+
+    try:
+        files = drive.list_files(
+            "trashed=false and name='series.json'",
+            fields="files(id, name, parents)",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mokuro: series.json search failed: %s", exc)
+        return {}
+    files = [f for f in files if folder_ids.intersection(f.parents or [])]
+
+    counts: dict[str, int] = {}
+    for info in files:
+        try:
+            counts.update(parse_series_page_counts(drive.download_file_text(info.id)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mokuro: series.json %s failed: %s", info.id, exc)
+    return counts
+
+
+def _attach_page_counts(
+    volumes: dict[str, dict[str, Any]],
+    *,
+    client=None,
+    folder_id: str = "",
+    folder_name: str = "mokuro-reader",
+) -> None:
+    try:
+        counts = fetch_page_counts(
+            client=client, folder_id=folder_id, folder_name=folder_name
+        )
+        _apply_page_counts(volumes, counts)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mokuro: page count fetch failed: %s", exc)
+
+
+def _stamp_page_total(db: Session, volume_id: str, rec: dict[str, Any]) -> None:
+    """Write the known volume length onto the open log, even when progress did not move."""
+    if not _page_count(rec):
+        return
+    logs = _open_volume_logs(db, volume_id)
+    if not logs:
+        return
+    keeper = logs[0]
+    end = _ref_pages(keeper.source_ref) or 0
+    amount = int(float(keeper.amount or 0))
+    start = max(0, end - amount)
+    notes = _volume_notes(
+        rec,
+        start=start,
+        pages=end,
+        amount=amount,
+        chars=_int_field(rec, "chars"),
+    )
+    if keeper.notes == notes:
+        return
+    keeper.notes = notes
+    keeper.updated_at = utcnow()
+    db.commit()
 
 
 def _open_volume_logs(db: Session, volume_id: str) -> list[LogEntry]:
@@ -331,6 +490,8 @@ def ingest_volumes(
                 result.skipped += 1
                 if not dry_run:
                     set_progress_watermark(db, volume_id, pages)
+            if not dry_run:
+                _stamp_page_total(db, volume_id, rec)
             continue
 
         if pages < prev:
@@ -339,6 +500,7 @@ def ingest_volumes(
             result.skipped += 1
             if not dry_run:
                 set_progress_watermark(db, volume_id, pages)
+                _stamp_page_total(db, volume_id, rec)
             continue
 
         delta = pages - prev
@@ -366,6 +528,8 @@ def ingest_volumes(
             _expand_completed_open_log(
                 db, result, volume_id=volume_id, rec=rec, pages=pages, chars=chars
             )
+        if not dry_run:
+            _stamp_page_total(db, volume_id, rec)
 
     result.details = {
         "volumes": len(volumes),
@@ -472,17 +636,28 @@ def _expand_completed_open_log(
     pages: int,
     chars: int,
 ) -> None:
-    """Credit baseline pages on an unpushed log once Mokuro marks the volume done."""
+    """Credit unread pages once Mokuro marks the volume done.
+
+    Already-pushed pages stay pushed. The open log becomes the remainder,
+    including a baseline that was never logged. If the pushed amount already
+    covers the volume, the open log is left as it is.
+    """
     logs = _open_volume_logs(db, volume_id)
     if not logs:
         return
     keeper = logs[0]
-    if int(float(keeper.amount or 0)) >= int(pages):
+    pushed = _pushed_volume_pages(db, volume_id)
+    if pushed >= int(pages):
         return
-    keeper.amount = float(pages)
+    target = int(pages) - pushed
+    current = int(float(keeper.amount or 0))
+    if current >= target:
+        return
+    start = max(0, int(pages) - target)
+    keeper.amount = float(target)
     keeper.source_ref = _source_ref(volume_id, pages)
     keeper.notes = _volume_notes(
-        rec, start=0, pages=pages, amount=int(pages), chars=chars
+        rec, start=start, pages=pages, amount=target, chars=chars
     )
     ts = _parse_ts(rec.get("lastProgressUpdate"))
     if ts:
@@ -510,11 +685,24 @@ def poll_mokuro(
         return result
 
     try:
-        volumes = snapshot if snapshot is not None else fetch_volume_data(
-            client=client,
-            folder_id=cfg.root_folder_id,
-            folder_name=cfg.root_folder_name or "mokuro-reader",
-        )
+        if snapshot is not None:
+            volumes = snapshot
+        else:
+            from app.ingest.hoshi_drive import HoshiDriveClient
+
+            drive = client or HoshiDriveClient()
+            folder_name = cfg.root_folder_name or "mokuro-reader"
+            volumes = fetch_volume_data(
+                client=drive,
+                folder_id=cfg.root_folder_id,
+                folder_name=folder_name,
+            )
+            _attach_page_counts(
+                volumes,
+                client=drive,
+                folder_id=cfg.root_folder_id,
+                folder_name=folder_name,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("mokuro: Drive fetch failed: %s", exc)
         result.ok = False

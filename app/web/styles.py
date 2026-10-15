@@ -2584,7 +2584,7 @@ table.catalog-table th .sort-ind {
   opacity: 0.75;
   margin-left: 0.15rem;
 }
-/* Queue status/mode dropdowns */
+/* Queue mode dropdown */
 .badge-select {
   font-family: var(--mono);
   font-size: 0.72rem;
@@ -2600,9 +2600,7 @@ table.catalog-table th .sort-ind {
 .badge-select:focus { outline: none; }
 .badge-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .badge-select:disabled { opacity: 0.55; cursor: wait; }
-.status-select.status-pending { background: var(--amber-bg); border-color: #d4b86a; }
-.status-select.status-ready { background: var(--blue-bg); border-color: #8aadc8; }
-.status-select.status-failed { background: var(--red-bg); border-color: #d4a09a; }
+
 .mokuro-pages {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
@@ -2630,16 +2628,7 @@ table.catalog-table th .sort-ind {
   white-space: normal;
   max-width: 28rem;
 }
-.row-config-body .q-fail-detail {
-  margin: 0.35rem 0 0;
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--danger, #a33);
-  line-height: 1.35;
-  white-space: normal;
-}
-.status-select.status-pushed { background: var(--green-bg); border-color: #8fbf95; }
-.queue-table .col-status,
+.queue-table .m-label { display: none; }
 .queue-table .col-mode { white-space: nowrap; }
 .queue-table .col-actions-q { white-space: nowrap; }
 .queue-table .col-actions-q button {
@@ -2717,51 +2706,6 @@ a.dash-cta-btn:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.3rem;
-}
-.row-config {
-  position: relative;
-}
-.row-config > summary {
-  list-style: none;
-  cursor: pointer;
-  font-size: 0.72rem;
-  font-weight: 700;
-  padding: 0.28rem 0.45rem;
-  border: 1px solid var(--line-strong);
-  background: var(--panel-2);
-  color: var(--muted);
-  min-height: 2rem;
-  display: inline-flex;
-  align-items: center;
-}
-.row-config > summary::-webkit-details-marker { display: none; }
-.row-config[open] > summary {
-  color: var(--ink);
-  border-color: var(--ink);
-}
-.row-config-body {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 2px);
-  z-index: 8;
-  min-width: 9.5rem;
-  padding: 0.45rem;
-  border: 2px solid var(--ink);
-  background: var(--panel);
-  box-shadow: 0 8px 20px rgba(20, 17, 14, 0.16);
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.row-config-body label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
 }
 .page-reading .reading-msg {
   min-height: 1.1rem;
@@ -2945,17 +2889,26 @@ a.dash-cta-btn:hover {
     flex: 1 1 42%;
     min-height: 3rem;
   }
-  .row-review .row-config {
-    flex: 1 1 100%;
-  }
-  .row-review .row-config > summary {
-    min-height: 2.5rem;
+  .queue-table td.col-mode {
     display: flex;
     align-items: center;
-    padding: 0.35rem 0.5rem;
-    border: 1px solid var(--line-strong);
-    background: var(--panel-2);
+    gap: 0.45rem;
+    margin-top: 0.35rem;
+  }
+  .queue-table .m-label {
+    display: inline-block;
+    min-width: 3.4rem;
+    font-size: 0.72rem;
     font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .queue-table .badge-select {
+    flex: 1 1 auto;
+    max-width: none;
+    min-height: 2.5rem;
+    font-size: 0.95rem;
   }
   .group-actions {
     width: 100%;

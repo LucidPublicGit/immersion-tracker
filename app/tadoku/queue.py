@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Optional
 
@@ -15,6 +16,28 @@ logger = logging.getLogger(__name__)
 
 # In-flight claim so approve + process_ready cannot both POST to tadoku.app
 _CLAIM_PREFIX = "submitting:"
+
+# Mokuro stores the volume length as "; total=N". Auto waits for "; completed".
+_PAGE_TOTAL_RE = re.compile(r"(?:^|[;\s])total=(\d+)\b")
+_VOLUME_DONE_RE = re.compile(r"\bcompleted\b", re.I)
+
+
+def holds_auto_until_volume_done(entry: LogEntry) -> bool:
+    """True when a manga log knows its page total and Mokuro has not finished it.
+
+    Approve and approve_many call _submit_entry directly and do not use this.
+    """
+    if (entry.content_type or "").strip().lower() != "manga":
+        return False
+    if (entry.source or "").strip().lower() != "mokuro":
+        return False
+    notes = entry.notes or ""
+    match = _PAGE_TOTAL_RE.search(notes)
+    if not match or int(match.group(1)) <= 0:
+        return False
+    if _VOLUME_DONE_RE.search(notes):
+        return False
+    return True
 
 
 def list_queue(
@@ -403,6 +426,7 @@ def process_ready(db: Session, client: Optional[TadokuClient] = None) -> dict:
     pushed = 0
     failed = 0
     skipped = 0
+    waiting = 0
     results = []
     for entry in ready:
         if _already_submitted(entry):
@@ -422,6 +446,16 @@ def process_ready(db: Session, client: Optional[TadokuClient] = None) -> dict:
         if rid.startswith(_CLAIM_PREFIX):
             skipped += 1
             results.append({"id": entry.id, "status": "claim_held", "remote_id": rid})
+            continue
+        if holds_auto_until_volume_done(entry):
+            waiting += 1
+            results.append(
+                {
+                    "id": entry.id,
+                    "status": "waiting",
+                    "note": "volume_unfinished",
+                }
+            )
             continue
 
         ok, remote_id, err = _submit_entry(db, entry, client)
@@ -446,5 +480,6 @@ def process_ready(db: Session, client: Optional[TadokuClient] = None) -> dict:
         "pushed": pushed,
         "failed": failed,
         "skipped": skipped,
+        "waiting": waiting,
         "results": results,
     }

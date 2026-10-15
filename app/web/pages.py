@@ -1508,7 +1508,9 @@ def queue_page() -> str:
         <b>1.</b> Approve or skip media ·
         <b>2.</b> Submit ready ·
         <b>3.</b> Log GSM / ABS / Reading gaps.
-        Status &amp; Mode live under each row’s <b>Edit</b>.
+        Mode is the dropdown on each row.
+        Auto waits until a manga volume with a known page count is finished.
+        Approve sends the current pages now.
       </p>
     </div>
   </details>

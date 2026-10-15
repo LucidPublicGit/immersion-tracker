@@ -7,7 +7,9 @@ from app.db.session import get_engine
 from app.ingest.mokuro import (
     _title_for,
     _volume_num,
+    fetch_page_counts,
     get_progress_watermark,
+    parse_series_page_counts,
     parse_volume_data,
     poll_mokuro,
     set_progress_watermark,
@@ -304,5 +306,122 @@ def test_retitles_existing_folder_slug_log(client):
         db.refresh(ugly)
         assert ugly.title == "Vagabond"
         assert ugly.episode == 5
+    finally:
+        db.close()
+
+
+def test_parse_series_page_counts():
+    raw = {
+        "volumes": [
+            {"volume_uuid": "vol-aaa", "page_count": 196},
+            {"volume_uuid": "zero", "page_count": 0},
+            {"volume_title": "no-id", "page_count": 10},
+        ]
+    }
+    assert parse_series_page_counts(raw) == {"vol-aaa": 196}
+    assert parse_series_page_counts("{") == {}
+
+
+class _DriveFile:
+    def __init__(self, file_id: str, name: str, parents: list[str]):
+        self.id = file_id
+        self.name = name
+        self.parents = parents
+
+
+class _PageCountDrive:
+    def find_root_folder(self, *, folder_id: str = "", folder_name: str = ""):
+        return "root-1"
+
+    def list_files(self, query: str, *, fields: str = ""):
+        if "mimeType" in query:
+            return [_DriveFile("folder-vagabond", "Vagabond", ["root-1"])]
+        if "series.json" in query:
+            return [
+                _DriveFile("good", "series.json", ["folder-vagabond"]),
+                _DriveFile("bad", "series.json", ["folder-vagabond"]),
+                _DriveFile("other", "series.json", ["somewhere-else"]),
+            ]
+        return []
+
+    def download_file_text(self, file_id: str) -> str:
+        if file_id == "bad":
+            raise RuntimeError("unreadable")
+        return (
+            '{"volumes":[{"volume_uuid":"vol-aaa","page_count":196},'
+            '{"volume_uuid":"other-vol","page_count":50}]}'
+        )
+
+
+def test_fetch_page_counts_uses_series_json_under_mokuro_root():
+    counts = fetch_page_counts(client=_PageCountDrive(), folder_name="mokuro-reader")
+    assert counts == {"vol-aaa": 196, "other-vol": 50}
+
+
+def test_page_count_in_notes_and_stamp_without_new_pages(client):
+    _enable(bootstrap=False)
+    db = _db()
+    rec = {
+        "progress": 38,
+        "chars": 100,
+        "completed": False,
+        "series_title": "Vagabond",
+        "volume_title": "vagabond_17",
+        "lastProgressUpdate": "2026-04-01T12:00:00Z",
+    }
+    try:
+        poll_mokuro(db, snapshot={"vol-aaa": rec})
+        poll_mokuro(db, snapshot={"vol-aaa": {**rec, "progress": 107, "chars": 1863}})
+        entry = db.query(LogEntry).filter(LogEntry.source == "mokuro").one()
+        assert entry.amount == 69
+        assert "total=" not in (entry.notes or "")
+        r = poll_mokuro(
+            db,
+            snapshot={"vol-aaa": {**rec, "progress": 107, "chars": 1863, "page_count": 196}},
+        )
+        assert r.logs_created == 0
+        db.refresh(entry)
+        assert entry.amount == 69
+        assert "pages 38→107 (+69)" in (entry.notes or "")
+        assert "total=196" in (entry.notes or "")
+        assert "completed" not in (entry.notes or "")
+    finally:
+        db.close()
+
+
+def test_completion_after_pushed_partial_does_not_double_count(client):
+    _enable(bootstrap=False)
+    db = _db()
+    rec = {
+        "progress": 38,
+        "chars": 100,
+        "completed": False,
+        "page_count": 196,
+        "series_title": "Vagabond",
+        "volume_title": "vagabond_17",
+        "lastProgressUpdate": "2026-04-01T12:00:00Z",
+    }
+    try:
+        poll_mokuro(db, snapshot={"vol-aaa": rec})
+        poll_mokuro(db, snapshot={"vol-aaa": {**rec, "progress": 107}})
+        partial = db.query(LogEntry).filter(LogEntry.source == "mokuro").one()
+        assert partial.amount == 69
+        partial.tadoku_status = "pushed"
+        db.commit()
+        r = poll_mokuro(
+            db,
+            snapshot={"vol-aaa": {**rec, "progress": 196, "completed": True}},
+        )
+        assert r.logs_created >= 1
+        logs = db.query(LogEntry).filter(LogEntry.source == "mokuro").all()
+        assert len(logs) == 2
+        by_status = {e.tadoku_status: e for e in logs}
+        assert by_status["pushed"].amount == 69
+        opened = by_status["pending"]
+        assert opened.amount == 127
+        assert opened.source_ref == "mokuro:vol-aaa:196"
+        assert "pages 69→196 (+127)" in (opened.notes or "")
+        assert "total=196" in (opened.notes or "")
+        assert "completed" in (opened.notes or "")
     finally:
         db.close()

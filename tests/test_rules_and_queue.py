@@ -372,3 +372,105 @@ def test_no_double_submit_when_remote_id_already_set(client, tmp_path, monkeypat
     assert check["tadoku_status"] == "pushed"
     assert check["tadoku_remote_id"] == "existing-remote-abc"
     assert result["failed"] == 0
+
+
+def _dry_run_tadoku(tmp_path, monkeypatch):
+    from app.tadoku.client import TadokuClient
+
+    export = tmp_path / "export"
+    export.mkdir()
+    monkeypatch.setattr(
+        "app.tadoku.queue.TadokuClient",
+        lambda: TadokuClient(export_dir=str(export), dry_run=True),
+    )
+    return export
+
+
+def test_manga_auto_waits_for_volume_finish_approve_does_not(client, tmp_path, monkeypatch):
+    """Known page total holds auto submit. Approve still sends the current pages."""
+    from app.db.session import get_db
+    from app.tadoku import queue as tadoku_queue
+
+    export = _dry_run_tadoku(tmp_path, monkeypatch)
+    unfinished = client.post(
+        "/api/logs",
+        json={
+            "content_type": "manga",
+            "title": "Vagabond",
+            "amount": 69,
+            "unit": "comic_pages",
+            "source": "mokuro",
+            "source_ref": "mokuro:vol-17:107",
+            "series_key": "manga:vagabond-hold",
+            "episode": 17,
+            "notes": "pages 38→107 (+69); total=196; chars=1863; volume=vagabond_17",
+            "tadoku_mode": "auto",
+        },
+    )
+    assert unfinished.status_code == 201
+    hold_id = unfinished.json()["id"]
+    assert unfinished.json()["tadoku_status"] == "ready"
+
+    plain = client.post(
+        "/api/logs",
+        json={
+            "content_type": "manga",
+            "title": "No Total",
+            "amount": 10,
+            "source": "mokuro",
+            "series_key": "manga:no-total",
+            "notes": "pages 0→10 (+10); volume=nototal_01",
+            "tadoku_mode": "auto",
+        },
+    )
+    assert plain.status_code == 201
+    plain_id = plain.json()["id"]
+
+    db = next(get_db())
+    try:
+        held = tadoku_queue.process_ready(db)
+    finally:
+        db.close()
+
+    assert held["waiting"] == 1
+    assert held["failed"] == 0
+    hold = client.get(f"/api/logs/{hold_id}").json()
+    assert hold["tadoku_status"] == "ready"
+    assert not hold["tadoku_remote_id"]
+    sent = client.get(f"/api/logs/{plain_id}").json()
+    assert sent["tadoku_status"] == "pushed"
+    assert len(list(export.glob("*.json"))) == 1
+
+    ap = client.post(f"/api/logs/{hold_id}/approve")
+    assert ap.status_code == 200
+    assert ap.json()["tadoku_status"] == "pushed"
+    assert ap.json()["amount"] == 69
+    assert len(list(export.glob("*.json"))) == 2
+
+    finished = client.post(
+        "/api/logs",
+        json={
+            "content_type": "manga",
+            "title": "Vagabond",
+            "amount": 127,
+            "unit": "comic_pages",
+            "source": "mokuro",
+            "source_ref": "mokuro:vol-17b:196",
+            "series_key": "manga:vagabond-done",
+            "episode": 18,
+            "notes": "pages 69→196 (+127); total=196; completed; volume=vagabond_18",
+            "tadoku_mode": "auto",
+        },
+    )
+    assert finished.status_code == 201
+    done_id = finished.json()["id"]
+    db = next(get_db())
+    try:
+        released = tadoku_queue.process_ready(db)
+    finally:
+        db.close()
+    assert released["waiting"] == 0
+    assert released["failed"] == 0
+    done = client.get(f"/api/logs/{done_id}").json()
+    assert done["tadoku_status"] == "pushed"
+    assert len(list(export.glob("*.json"))) == 3
