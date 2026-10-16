@@ -86,11 +86,17 @@ def mapping_for(entry):
     return db.get(TitleIdentity, source_key(entry)) if db else None
 
 
+# Confirmed identities replace the raw work name. Manga, books, and movies
+# stay as that name. Shows still need SxxExx: Tadoku has no episode field.
+_TITLE_ONLY_TYPES = {"manga", "book", "comic", "movie", "film"}
+
+
 def export_title(entry):
     mapping = mapping_for(entry)
-    if mapping:
+    if mapping and (getattr(entry, "content_type", None) or "").strip().lower() in _TITLE_ONLY_TYPES:
         return mapping.canonical_title
-    return tadoku_title(entry.title, season=entry.season, episode=entry.episode, content_type=entry.content_type)
+    base = mapping.canonical_title if mapping else entry.title
+    return tadoku_title(base, season=entry.season, episode=entry.episode, content_type=entry.content_type)
 
 
 def sign_preview(entry, candidates):

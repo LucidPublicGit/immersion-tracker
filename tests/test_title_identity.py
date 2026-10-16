@@ -39,6 +39,46 @@ def confirm(client, log, result):
     return client.post(f"/api/logs/{log['id']}/title-identity", json={'token': result['token'], 'provider_id':'85802'})
 
 
+def test_mapped_show_keeps_episode_on_tadoku_title(client):
+    """A confirmed show title replaces the raw name and still logs SxxExx."""
+    from app.tadoku.client import TadokuClient
+
+    created = client.post(
+        "/api/logs",
+        json={
+            "title": "Gendai Shikaku Bunka Kenkyuu Kai",
+            "content_type": "anime",
+            "source": "jellyfin",
+            "amount": 24,
+            "unit": "minutes",
+            "season": 2,
+            "episode": 3,
+            "source_ref": f"jellyfin-genshiken-{time.time_ns()}",
+        },
+    )
+    assert created.status_code == 201, created.text
+    with Session(get_engine()) as db:
+        entry = db.get(LogEntry, created.json()["id"])
+        db.add(
+            TitleIdentity(
+                source_key=identity.source_key(entry),
+                source=entry.source,
+                content_type=entry.content_type,
+                original_title=entry.title,
+                canonical_title="げんしけん",
+                provider="anilist",
+                provider_id="240",
+                provider_url="https://anilist.co/anime/240",
+            )
+        )
+        db.commit()
+        db.refresh(entry)
+        assert identity.export_title(entry) == "げんしけん S02E03"
+        assert TadokuClient()._description_for(entry) == "げんしけん S02E03"
+        assert entry.title == "Gendai Shikaku Bunka Kenkyuu Kai"
+        assert entry.episode == 3
+
+
 def test_exact_export_persists_without_ai_or_web_and_retains_raw(client, provider, monkeypatch):
     log = make_log(client)
     result = preview(client, log)
@@ -300,7 +340,7 @@ def test_drama_confirmation_persists_jiten_provenance(client,monkeypatch):
     assert result['provider']=='jiten' and result['candidates'][0]['text_match']=='alias_normalized'
     r=client.post(f"/api/logs/{log['id']}/title-identity",json={'token':result['token'],'provider_id':'111215'})
     assert r.status_code==200 and r.json()['title_identity']['provider']=='jiten'
-    assert r.json()['tadoku_title']=='テラスハウス ボーイズ ガールズ ネクストドア'
+    assert r.json()['tadoku_title']=='テラスハウス ボーイズ ガールズ ネクストドア E03'
     assert r.json()['title']==log['title']
 
 
@@ -364,5 +404,5 @@ def test_saved_mapping_reused_by_subsequent_plex_webhook_offline(client, monkeyp
         assert f'plex_title={RAW}' in row.notes
         assert row.series_key == db.get(LogEntry, first['log_id']).series_key
         payload = TadokuClient().to_local_payload(row)
-        assert payload['title'] == CANONICAL and payload['title_base'] == RAW
-        assert TadokuClient()._description_for(row) == CANONICAL
+        assert payload['title'] == f'{CANONICAL} S01E02' and payload['title_base'] == RAW
+        assert TadokuClient()._description_for(row) == f'{CANONICAL} S01E02'
