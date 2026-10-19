@@ -2606,9 +2606,17 @@ table.catalog-table th .sort-ind {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.mokuro-pages.done {
-  color: var(--green);
+.mokuro-logged { color: var(--amber); background: var(--amber-bg); }
+.mokuro-current { color: var(--blue); background: var(--blue-bg); }
+.mokuro-total { color: #fffaf0; background: #2e2922; }
+.mokuro-logged, .mokuro-current, .mokuro-total {
+  display: inline-block;
+  padding: 0.1rem 0.25rem;
+  border-radius: 2px;
   font-weight: 700;
+}
+.mokuro-total.done, .mokuro-total.done .mokuro-ok {
+  color: #86efac;
 }
 .mokuro-ok {
   font-weight: 800;

@@ -77,6 +77,17 @@ def _log_out(entry) -> LogOut:
 
     data = LogOut.model_validate(entry)
     data.tadoku_title = export_title(entry)
+    if entry.source == 'mokuro' and entry.source_ref:
+        from sqlalchemy.orm import object_session
+        from app.ingest.mokuro import _pushed_volume_pages
+
+        parts = entry.source_ref.split(':')
+        db = object_session(entry)
+        if db is not None and len(parts) == 3 and parts[0] == 'mokuro':
+            pushed = _pushed_volume_pages(db, parts[1])
+            # Keep this row separate even when viewing an already-pushed log.
+            own = float(entry.amount or 0) if entry.tadoku_status == 'pushed' else 0
+            data.mokuro_logged_pages = max(0, pushed - own)
     identity = mapping_for(entry)
     if identity:
         data.title_identity = {'title': identity.canonical_title, 'provider': identity.provider,

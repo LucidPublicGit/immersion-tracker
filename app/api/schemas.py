@@ -99,6 +99,8 @@ class LogOut(BaseModel):
     watch_ratio: Optional[float]
     tadoku_title: Optional[str] = None
     title_identity: Optional[dict] = None
+    # Pages submitted by other logs for this exact Mokuro volume.
+    mokuro_logged_pages: Optional[float] = None
     # When the row last changed (submit/push sets this; useful for recent-sent lists)
     updated_at: Optional[datetime] = None
 

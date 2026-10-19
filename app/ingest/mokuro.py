@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from datetime import datetime
 from typing import Any, Optional
 
@@ -88,19 +89,20 @@ OPEN_STATUSES = ("pending", "ready")
 
 _VOL_NUM_RE = re.compile(
     r"(?:第\s*)?0*(?P<n>\d{1,3})\s*巻$|"
-    r"(?:^|[_\-\s])(?:vol(?:ume)?\.?[_\-\s]*)?0*(?P<n2>\d{1,3})$",
+    r"(?:^|[_\-\s])(?:vol(?:ume)?\.?[_\-\s]*)?0*(?P<n2>\d{1,3})$|"
+    r"\((?P<n3>\d{1,3})\)(?:\s*\([^()]*\))?$",
     re.I,
 )
 
 
 def _volume_num(volume_title: str) -> Optional[int]:
-    t = (volume_title or "").strip()
+    t = unicodedata.normalize("NFKC", volume_title or "").strip()
     if not t:
         return None
     m = _VOL_NUM_RE.search(t)
     if not m:
         return None
-    raw = m.group("n") or m.group("n2")
+    raw = m.group("n") or m.group("n2") or m.group("n3")
     return int(raw) if raw else None
 
 
@@ -110,7 +112,7 @@ def _title_for(record: dict[str, Any], volume_id: str) -> str:
         return series
     volume = str(record.get("volume_title") or "").strip()
     if volume:
-        stripped = _VOL_NUM_RE.sub("", volume).replace("_", " ").strip(" -_")
+        stripped = _VOL_NUM_RE.sub("", unicodedata.normalize("NFKC", volume)).replace("_", " ").strip(" -_")
         return stripped or volume.replace("_", " ")
     return volume_id[:12]
 

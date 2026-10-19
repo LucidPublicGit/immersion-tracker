@@ -79,6 +79,55 @@ def test_mapped_show_keeps_episode_on_tadoku_title(client):
         assert entry.episode == 3
 
 
+@pytest.mark.parametrize('content_type,season,episode,expected', [
+    ('manga', None, 17, 'Vol 17'),
+    ('book', None, 4, 'Vol 4'),
+    ('comic', None, 2, 'Vol 2'),
+    ('show', 2, 3, 'S02E03'),
+    ('anime', None, 5, 'E05'),
+    ('movie', 0, 0, ''),
+    ('manga', None, None, ''),
+])
+def test_confirmed_identity_preserves_position(client, content_type, season, episode, expected):
+    from app.tadoku.client import TadokuClient
+
+    with Session(get_engine()) as db:
+        entry = LogEntry(title=RAW, content_type=content_type, source='manual',
+                         amount=12, unit='pages', season=season, episode=episode)
+        db.add(entry)
+        db.flush()
+        db.add(TitleIdentity(source_key=identity.source_key(entry), source=entry.source,
+                             content_type=content_type, original_title=RAW,
+                             canonical_title=CANONICAL, provider='anilist',
+                             provider_id='85802', provider_url=CANDIDATES[0]['provider_url']))
+        db.commit()
+        title = f'{CANONICAL} {expected}'.strip()
+        assert identity.export_title(entry) == title
+        assert TadokuClient()._description_for(entry) == title
+        assert TadokuClient().to_local_payload(entry)['title'] == title
+
+
+def test_existing_mokuro_log_recovers_volume_from_notes(client):
+    from app.tadoku.client import TadokuClient
+
+    with Session(get_engine()) as db:
+        entry = LogEntry(title=RAW, content_type='manga', source='mokuro', amount=194,
+                         unit='comic_pages', tadoku_status='pushed', tadoku_remote_id='existing',
+                         notes='pages 0→194 (+194); completed; volume=作品 （０４） (wangson)')
+        db.add(entry)
+        db.flush()
+        db.add(TitleIdentity(source_key=identity.source_key(entry), source=entry.source,
+                             content_type=entry.content_type, original_title=RAW,
+                             canonical_title=CANONICAL, provider='anilist',
+                             provider_id='85802', provider_url=CANDIDATES[0]['provider_url']))
+        db.commit()
+        assert TadokuClient()._description_for(entry) == f'{CANONICAL} Vol 4'
+        assert entry.episode is None and entry.amount == 194
+        assert entry.tadoku_status == 'pushed' and entry.tadoku_remote_id == 'existing'
+        entry.episode = 5
+        assert identity.export_title(entry) == f'{CANONICAL} Vol 5'
+
+
 def test_exact_export_persists_without_ai_or_web_and_retains_raw(client, provider, monkeypatch):
     log = make_log(client)
     result = preview(client, log)
@@ -87,12 +136,12 @@ def test_exact_export_persists_without_ai_or_web_and_retains_raw(client, provide
     assert client.get(f"/api/logs/{log['id']}").json()['title_identity'] is None
     saved = confirm(client, log, result)
     assert saved.status_code == 200
-    assert saved.json()['tadoku_title'] == CANONICAL
+    assert saved.json()['tadoku_title'] == f'{CANONICAL} Vol 3'
     assert saved.json()['title'] == RAW
     monkeypatch.setenv('TITLE_LOOKUP_WEB_ENABLED', 'false')
     monkeypatch.setenv('LOCAL_AI_CATALOG_ENABLED', 'false')
     future = make_log(client)
-    assert future['tadoku_title'] == CANONICAL
+    assert future['tadoku_title'] == f'{CANONICAL} Vol 3'
     assert future['title_identity']['url'] == CANDIDATES[0]['provider_url']
     assert make_log(client, source='manual')['title_identity'] is None
     with Session(get_engine()) as db:
@@ -106,9 +155,9 @@ def test_exact_export_persists_without_ai_or_web_and_retains_raw(client, provide
     with Session(get_engine()) as db:
         entry = db.get(LogEntry, log['id'])
         payload = TadokuClient().to_local_payload(entry)
-        assert payload['title'] == CANONICAL
+        assert payload['title'] == f'{CANONICAL} Vol 3'
         assert payload['title_base'] == RAW
-        assert TadokuClient()._description_for(entry) == CANONICAL
+        assert TadokuClient()._description_for(entry) == f'{CANONICAL} Vol 3'
         assert entry.amount == 12 and entry.episode == 3 and entry.source_ref == log['source_ref']
         # A later importer fold restores raw source identity; the mapping still resolves it.
         from app.ingest.mokuro import _apply_identity
@@ -116,7 +165,7 @@ def test_exact_export_persists_without_ai_or_web_and_retains_raw(client, provide
         _apply_identity(entry, {'series_title':RAW, 'volume_title':'第3巻'}, 'test-volume')
         assert entry.title == RAW and entry.episode == 3 and entry.amount == 12
         db.commit()
-        assert identity.export_title(entry) == CANONICAL
+        assert identity.export_title(entry) == f'{CANONICAL} Vol 3'
         assert db.query(TitleIdentity).count() == 1
     removed = client.delete(f"/api/logs/{log['id']}/title-identity")
     assert removed.status_code == 200 and removed.json()['title_identity'] is None
@@ -263,7 +312,7 @@ def test_direct_lookup_preview_requires_confirmation(client,monkeypatch):
     result=r.json();assert r.status_code==200 and result['lookup_mode']=='provider_id'
     assert len(result['candidates'])==1
     assert client.get(f"/api/logs/{log['id']}").json()['title_identity'] is None
-    assert confirm(client,log,result).json()['tadoku_title']==CANONICAL
+    assert confirm(client,log,result).json()['tadoku_title']==f'{CANONICAL} Vol 3'
 
 
 @pytest.mark.asyncio
@@ -344,7 +393,8 @@ def test_drama_confirmation_persists_jiten_provenance(client,monkeypatch):
     assert r.json()['title']==log['title']
 
 
-def test_saved_mapping_reused_by_mokuro_poll_and_fold_offline(client, provider, monkeypatch):
+@pytest.mark.parametrize('volume_title', ['第4巻', '作品 （０４） (wangson)'])
+def test_saved_mapping_reused_by_mokuro_poll_and_fold_offline(client, provider, monkeypatch, volume_title):
     from app.core.config import get_settings
     from app.ingest.mokuro import get_progress_watermark, poll_mokuro
     from app.tadoku.client import TadokuClient
@@ -356,14 +406,14 @@ def test_saved_mapping_reused_by_mokuro_poll_and_fold_offline(client, provider, 
     cfg = get_settings().yaml_config.mokuro
     cfg.enabled, cfg.bootstrap, cfg.min_pages = True, False, 1
     cfg.content_type, cfg.unit, cfg.tadoku_default = 'manga', 'comic_pages', 'pending'
-    rec = dict(series_title=RAW, volume_title='第4巻', progress=10, chars=1000,
+    rec = dict(series_title=RAW, volume_title=volume_title, progress=10, chars=1000,
                completed=False, lastProgressUpdate='2026-04-01T12:00:00Z')
     with Session(get_engine()) as db:
         assert poll_mokuro(db, snapshot={'offline-volume': rec}).logs_created == 0
         assert poll_mokuro(db, snapshot={'offline-volume': {**rec, 'progress': 15}}).logs_created == 1
         row = db.query(LogEntry).filter(LogEntry.source_ref == 'mokuro:offline-volume:15').one()
         first_id, first_key = row.id, row.series_key
-        assert TadokuClient().to_local_payload(row)['title'] == CANONICAL
+        assert TadokuClient().to_local_payload(row)['title'] == f'{CANONICAL} Vol 4'
         assert poll_mokuro(db, snapshot={'offline-volume': {**rec, 'progress': 22}}).logs_created == 1
         db.refresh(row)
         assert row.id == first_id and row.series_key == first_key
@@ -371,8 +421,8 @@ def test_saved_mapping_reused_by_mokuro_poll_and_fold_offline(client, provider, 
         assert row.source_ref == 'mokuro:offline-volume:22'
         assert get_progress_watermark(db, 'offline-volume') == 22
         payload = TadokuClient().to_local_payload(row)
-        assert payload['title'] == CANONICAL and payload['title_base'] == RAW
-        assert TadokuClient()._description_for(row) == CANONICAL
+        assert payload['title'] == f'{CANONICAL} Vol 4' and payload['title_base'] == RAW
+        assert TadokuClient()._description_for(row) == f'{CANONICAL} Vol 4'
 
 
 def test_saved_mapping_reused_by_subsequent_plex_webhook_offline(client, monkeypatch):

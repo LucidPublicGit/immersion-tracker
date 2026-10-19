@@ -66,6 +66,11 @@ def test_title_is_series_volume_is_episode():
     assert _volume_num("第1巻") == 1
     assert _volume_num("Vol. 12") == 12
     assert _volume_num("05") == 5
+    assert _volume_num("ドメスティックな彼女　よりぬきカラー版 （０４） (wangson)") == 4
+    assert _volume_num("Series (12)") == 12
+    assert _volume_num("第１７巻") == 17
+    assert _volume_num("Series (uploader)") is None
+    assert _volume_num("Series (More Color Version)") is None
 
 
 def test_disabled(client):

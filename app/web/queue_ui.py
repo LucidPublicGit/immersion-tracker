@@ -60,21 +60,14 @@ function mokuroPagesHtml(e){
   const m=notes.match(/pages\s+(\d+)\s*→\s*(\d+)\s*\(\+(\d+)\)/i);
   const totalM=notes.match(/(?:^|[;\s])total=(\d+)/i);
   const done=/\bcompleted\b/i.test(notes);
-  const logged=Number(e.amount)||(m?Number(m[3]):0);
+  const current=Math.max(0,Number(e.amount)||0);
+  const already=Math.max(0,Number(e.mokuro_logged_pages)||0);
   const end=m?Number(m[2]):0;
-  const total=totalM?Number(totalM[1]):0;
-  if(total>0){
-    const cur=end>0?end:logged;
-    const ok=done||cur>=total;
-    const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';
-    return `<span class="mokuro-pages${ok?' done':''}" title="Current page / volume pages">${cur}/${total}${check}</span>`;
-  }
-  if(done && end>0){
-    const ok=logged>=end;
-    const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';
-    return `<span class="mokuro-pages${ok?' done':''}" title="Logged pages / volume pages (UI only)">${logged}/${end}${check}</span>`;
-  }
-  return `<span class="mokuro-pages" title="Logged pages (volume not marked complete)">${logged} pages</span>`;
+  const total=totalM?Number(totalM[1]):(done?end:0);
+  const ok=done||(total>0 && already+current>=total);
+  const check=ok?' <span class="mokuro-ok" aria-label="complete">✓</span>':'';
+  const amountLabel=e.tadoku_status==='pushed'?'Pages submitted by this log':'Pages to submit with this log';
+  return `<span class="mokuro-pages" aria-label="${already} pages already submitted by other logs, ${current} pages in this log, ${total||'unknown'} volume pages${ok?', complete':''}"><span class="mokuro-logged" title="Pages already submitted by other logs for this volume">${already}</span> + <span class="mokuro-current" title="${amountLabel}">${current}</span> / <span class="mokuro-total${ok?' done':''}" title="Volume pages${ok?' — complete':''}">${total||'?'}${check}</span></span>`;
 }
 /** Last [tadoku] … line from log notes (submit failure detail). */
 function tadokuFailFromNotes(notes){

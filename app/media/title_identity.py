@@ -86,17 +86,20 @@ def mapping_for(entry):
     return db.get(TitleIdentity, source_key(entry)) if db else None
 
 
-# Confirmed identities replace the raw work name. Manga, books, and movies
-# stay as that name. Shows still need SxxExx: Tadoku has no episode field.
-_TITLE_ONLY_TYPES = {"manga", "book", "comic", "movie", "film"}
-
-
 def export_title(entry):
+    # A confirmed identity replaces only the work name, never its position.
     mapping = mapping_for(entry)
-    if mapping and (getattr(entry, "content_type", None) or "").strip().lower() in _TITLE_ONLY_TYPES:
-        return mapping.canonical_title
     base = mapping.canonical_title if mapping else entry.title
-    return tadoku_title(base, season=entry.season, episode=entry.episode, content_type=entry.content_type)
+    episode = entry.episode
+    if episode is None and (entry.source or "").strip().lower() == "mokuro":
+        # Older imports may retain a volume filename only in their notes.
+        # Recover it without mutating accounting or resubmitting pushed logs.
+        from app.ingest.mokuro import _volume_num
+
+        match = re.search(r"(?:^|;\s*)volume=([^;]+)", entry.notes or "")
+        if match:
+            episode = _volume_num(match.group(1))
+    return tadoku_title(base, season=entry.season, episode=episode, content_type=entry.content_type)
 
 
 def sign_preview(entry, candidates):
