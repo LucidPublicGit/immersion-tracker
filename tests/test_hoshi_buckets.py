@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.db.models import HoshiBookBucket, HoshiSessionFragment, LogEntry
 from app.db.session import get_engine
 from app.ingest.hoshi import ingest_book_days, series_key_for_title
@@ -293,7 +295,8 @@ def test_reading_api_endpoints(client):
 
 
 def test_series_key_for_title_stable():
-    assert series_key_for_title("  夜は短し  ").startswith("hoshi:")
+    assert series_key_for_title("  夜は短し  ") == series_key_for_title("夜は短し")
+    assert series_key_for_title("Combine Novel") == "book:combine-novel"
 
 
 def test_prefs_and_per_book_threshold(client):
@@ -387,6 +390,7 @@ def test_consolidate_merges_open_logs_into_one(client):
             series_key=sk,
             source_ref="hoshi:combine:b",
         )
+        assert a.series_key == b.series_key == sk
         a.tadoku_status = "failed"
         b.tadoku_status = "failed"
         db.commit()
@@ -410,6 +414,276 @@ def test_consolidate_merges_open_logs_into_one(client):
         )
         assert len(open_left) == 1
         assert float(open_left[0].amount) == 1500.0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("bucket_key", ["hoshi:Legacy Novel", "book:legacy-novel"])
+@pytest.mark.parametrize("log_keys", [
+    ("book:legacy-novel", "book:legacy-novel"),
+    ("hoshi:Legacy Novel", "hoshi:Legacy Novel"),
+    ("hoshi:Legacy Novel", "book:legacy-novel"),
+])
+def test_consolidate_legacy_key_variants(client, monkeypatch, bucket_key, log_keys):
+    from app.core.config import get_settings
+    from app.ingest.hoshi_buckets import (
+        backfill_logged_totals_from_logs, bucket_to_dict,
+        consolidate_bucket_for_tadoku, log_all_to_tadoku,
+    )
+    from app.ingest.service import create_log
+
+    get_settings().yaml_config.hoshi.log_mode = "manual"
+    db = _db()
+    try:
+        bucket, fragment, _ = add_session_fragment(
+            db, folder_id="legacy", title="Legacy Novel",
+            date_key="2026-07-25", chars=25,
+        )
+        bucket.series_key = bucket_key
+        db.commit()
+        originals = []
+        for i, (key, amount) in enumerate(zip(log_keys, (100, 50))):
+            entry = create_log(
+                db, content_type="book", title=bucket.title, source="hoshi",
+                amount=amount, unit="characters", activity="reading",
+                series_key=key, source_ref=f"hoshi:legacy:{i}",
+            )
+            # Simulate persisted logs from before identity normalization.
+            entry.series_key = key
+            entry.tadoku_status = "failed"
+            originals.append(entry)
+        db.commit()
+
+        before = reading_dashboard(db)
+        before_row = next(b for b in before["buckets"] if b["id"] == bucket.id)
+        assert before_row["total_logged_chars"] == before_row["lifetime_chars"] == 150
+        assert before_row["submit_count"] == 2
+        assert before_row["last_log_id"] == originals[-1].id
+        assert backfill_logged_totals_from_logs(db) == 0
+        row = bucket_to_dict(db, bucket)
+        assert row["tadoku_awaiting_chars"] == 150
+        assert {log["id"] for log in row["logs"]} == {entry.id for entry in originals}
+        # Bulk eligibility must also find these logs without a pending buffer.
+        pending = bucket.pending_chars
+        bucket.pending_chars = 0
+        calls = []
+        monkeypatch.setattr(
+            "app.ingest.hoshi_buckets.log_bucket_to_tadoku",
+            lambda db, bucket_id: calls.append(bucket_id) or {},
+        )
+        assert log_all_to_tadoku(db)["books"] == 1
+        assert calls == [bucket.id]
+        bucket.pending_chars = pending
+        combined = consolidate_bucket_for_tadoku(db, bucket.id)
+        assert combined.amount == 175
+        assert combined.unit == "characters"
+        assert combined.series_key == "book:legacy-novel"
+        assert bucket.series_key == bucket_key  # No historical key migration.
+        assert bucket.pending_chars == 0
+        assert bucket.total_logged_chars == 175  # Consolidation adds no credit.
+        assert fragment.status == "logged"
+        for entry, key in zip(originals, log_keys):
+            db.refresh(entry)
+            assert entry.series_key == key
+            assert entry.tadoku_status == "skipped"
+        count = db.query(LogEntry).count()
+        snapshots = [(e.id, e.series_key, e.amount, e.notes, e.tadoku_status)
+                     for e in db.query(LogEntry).order_by(LogEntry.id).all()]
+        for _ in range(2):
+            after = reading_dashboard(db)
+            after_row = next(b for b in after["buckets"] if b["id"] == bucket.id)
+            assert after_row["total_logged_chars"] == after_row["lifetime_chars"] == 175
+            assert after_row["tadoku_awaiting_chars"] == 175
+            assert after_row["submit_count"] == 3
+            assert after_row["last_log_id"] == combined.id
+            assert backfill_logged_totals_from_logs(db) == 0
+        assert [(e.id, e.series_key, e.amount, e.notes, e.tadoku_status)
+                for e in db.query(LogEntry).order_by(LogEntry.id).all()] == snapshots
+        assert consolidate_bucket_for_tadoku(db, bucket.id).id == combined.id
+        assert submit_bucket(db, bucket.id, force=True) is None
+        assert db.query(LogEntry).count() == count
+    finally:
+        db.close()
+
+
+def test_consolidate_excludes_submitted_inflight_and_unrelated_logs(client):
+    from app.ingest.hoshi_buckets import get_or_create_bucket, consolidate_bucket_for_tadoku
+    from app.ingest.service import create_log
+
+    db = _db()
+    try:
+        bucket = get_or_create_bucket(db, folder_id="safe", title="Safe Novel")
+        db.commit()
+        excluded = []
+        variants = [
+            ("hoshi", "characters", bucket.series_key, "pushed", None),
+            ("hoshi", "characters", bucket.series_key, "failed", "remote-123"),
+            ("hoshi", "characters", bucket.series_key, "ready", "inflight:abc"),
+            ("hoshi", "characters", bucket.series_key, "skipped", None),
+            ("hoshi", "characters", "book:another-novel", "pending", None),
+            ("hoshi", "characters", "custom:catalog-work", "pending", None),
+            ("manual", "characters", bucket.series_key, "pending", None),
+            ("hoshi", "minutes", bucket.series_key, "pending", None),
+        ]
+        for i, (source, unit, key, status, remote) in enumerate(variants):
+            entry = create_log(
+                db, content_type="book", title=bucket.title, source=source,
+                amount=1000, unit=unit, activity="reading", series_key=key,
+                source_ref=f"hoshi:excluded:{i}",
+            )
+            entry.series_key = key
+            entry.tadoku_status = status
+            entry.tadoku_remote_id = remote
+            excluded.append(entry)
+        db.commit()
+        # With only excluded rows, even single-log failure reset must not run.
+        assert consolidate_bucket_for_tadoku(db, bucket.id) is None
+        for i, amount in enumerate((100, 50)):
+            entry = create_log(
+                db, content_type="book", title=bucket.title, source="hoshi",
+                amount=amount, unit="characters", activity="reading",
+                series_key=bucket.series_key, source_ref=f"hoshi:safe:{i}",
+            )
+            entry.tadoku_remote_id = "" if i else None
+        db.commit()
+        combined = consolidate_bucket_for_tadoku(db, bucket.id)
+        assert combined.amount == 150
+        for entry, (_, unit, key, status, remote) in zip(excluded, variants):
+            db.refresh(entry)
+            assert (entry.unit, entry.series_key, entry.tadoku_status, entry.tadoku_remote_id) == (
+                unit, key, status, remote,
+            )
+    finally:
+        db.close()
+
+
+def test_catalog_link_survives_title_changes_and_consolidation(client):
+    from app.core.config import get_settings
+    from app.ingest.hoshi_buckets import (
+        get_or_create_bucket, update_bucket_settings, consolidate_bucket_for_tadoku,
+    )
+    from app.ingest.service import create_log
+
+    get_settings().yaml_config.hoshi.log_mode = "manual"
+    db = _db()
+    try:
+        bucket = get_or_create_bucket(db, folder_id="linked", title="Old Title")
+        bucket.series_key = "book:catalog-linked-work"
+        db.commit()
+        get_or_create_bucket(db, folder_id="linked", title="Poll Title")
+        assert bucket.series_key == "book:catalog-linked-work"
+        update_bucket_settings(db, bucket.id, title="UI Title")
+        assert bucket.series_key == "book:catalog-linked-work"
+        unrelated = create_log(
+            db, content_type="book", title=bucket.title, source="hoshi",
+            amount=1000, unit="characters", activity="reading",
+            series_key=series_key_for_title(bucket.title), source_ref="hoshi:unlinked",
+        )
+        for i, chars in enumerate((100, 50)):
+            add_session_fragment(
+                db, folder_id=bucket.folder_id, title=bucket.title,
+                date_key=f"2026-07-{25 + i}", chars=chars,
+            )
+            assert submit_bucket(db, bucket.id, force=True).series_key == bucket.series_key
+        combined = consolidate_bucket_for_tadoku(db, bucket.id)
+        assert combined.amount == 150
+        assert combined.series_key == bucket.series_key
+        db.refresh(unrelated)
+        assert unrelated.tadoku_status == "pending"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("bucket_key", ["hoshi:History Novel", "book:history-novel"])
+def test_backfill_mixed_keys_preserves_latest_metadata(client, bucket_key):
+    from datetime import datetime, timezone
+
+    from app.ingest.hoshi_buckets import (
+        backfill_logged_totals_from_logs, get_or_create_bucket,
+    )
+    from app.ingest.service import create_log
+
+    db = _db()
+    try:
+        bucket = get_or_create_bucket(db, folder_id="history", title="History Novel")
+        bucket.series_key = bucket_key
+        entries = []
+        for i, (key, notes, status) in enumerate([
+            ("hoshi:History Novel", "pos 900/1000", "pushed"),
+            ("book:history-novel", "pos 400/1000", "skipped"),
+            ("hoshi:History Novel", None, "failed"),
+        ]):
+            entry = create_log(
+                db, content_type="book", title=bucket.title, source="hoshi",
+                amount=100, unit="characters", activity="reading",
+                series_key=key, source_ref=f"hoshi:history:{i}", notes=notes,
+                # Reading dates run backward; insertion order still determines
+                # the latest log and latest available position across keys.
+                timestamp=datetime(2026, 7, 25 - i, tzinfo=timezone.utc),
+            )
+            entry.series_key = key
+            entry.tadoku_status = status
+            entries.append(entry)
+        # Total is already correct: metadata must still reconcile independently.
+        bucket.total_logged_chars = 300
+        bucket.submit_count = 1
+        bucket.last_log_id = entries[0].id
+        bucket.last_logged_position_chars = 900
+        db.commit()
+
+        assert backfill_logged_totals_from_logs(db) == 1
+        db.refresh(bucket)
+        assert bucket.total_logged_chars == 300  # Ordinary skipped logs count.
+        assert bucket.submit_count == 3
+        assert bucket.last_log_id == entries[-1].id
+        assert bucket.last_logged_position_chars == 400
+        assert bucket.series_key == bucket_key
+        assert backfill_logged_totals_from_logs(db) == 0
+        row = next(b for b in reading_dashboard(db)["buckets"] if b["id"] == bucket.id)
+        assert row["last_log_id"] == entries[-1].id
+        assert row["last_logged_position_chars"] == 400
+    finally:
+        db.close()
+
+
+def test_backfill_custom_link_requires_exact_key(client):
+    from app.ingest.hoshi_buckets import (
+        backfill_logged_totals_from_logs, get_or_create_bucket,
+    )
+    from app.ingest.service import create_log
+
+    db = _db()
+    try:
+        bucket = get_or_create_bucket(db, folder_id="custom", title="Shared Title")
+        bucket.series_key = "book:catalog-linked-work"
+        bucket.last_logged_position_chars = 77
+        db.commit()
+        for i, key in enumerate(["book:shared-title", "hoshi:Shared Title", None]):
+            entry = create_log(
+                db, content_type="book", title=bucket.title, source="hoshi",
+                amount=1000, unit="characters", activity="reading",
+                series_key=key, source_ref=f"hoshi:custom-unrelated:{i}", notes="pos 900",
+            )
+            entry.series_key = key
+        db.commit()
+        assert backfill_logged_totals_from_logs(db) == 0
+        row = next(b for b in reading_dashboard(db)["buckets"] if b["id"] == bucket.id)
+        assert row["total_logged_chars"] == row["submit_count"] == 0
+        assert row["last_log_id"] is None
+        assert row["last_logged_position_chars"] == 77
+
+        exact = create_log(
+            db, content_type="book", title="Different Catalog Title", source="hoshi",
+            amount=75, unit="characters", activity="reading",
+            series_key=bucket.series_key, source_ref="hoshi:custom-exact",
+        )
+        assert backfill_logged_totals_from_logs(db) == 1
+        db.refresh(bucket)
+        assert bucket.total_logged_chars == 75
+        assert bucket.submit_count == 1
+        assert bucket.last_log_id == exact.id
+        assert bucket.last_logged_position_chars == 77  # No new position in notes.
+        assert backfill_logged_totals_from_logs(db) == 0
     finally:
         db.close()
 

@@ -692,7 +692,11 @@ def test_enrich_returns_progress_snapshot(client, db):
     assert body["progress"]["total"] >= 1
 
 
-def test_home_has_club_link(client):
+def test_home_has_club_link(client, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings().yaml_config.tadoku.contest, "contest_id",
+                        "00000000-0000-0000-0000-000000000001")
     r = client.get("/")
     assert r.status_code == 200
     assert b"Tadoku contest" in r.content

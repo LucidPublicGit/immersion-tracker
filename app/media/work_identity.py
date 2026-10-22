@@ -1129,7 +1129,18 @@ def prepare_log_identity(
 
     Returns content_type, title, series_key, season, episode.
     """
-    peeled = peel_log_fields(title)
+    # Spotify's catalog key identifies the show, but each log title is the
+    # episode name. Episode numbers/topics are meaningful text, not TV-style
+    # suffixes to strip or turn into shelf season/episode metadata.
+    if source.strip().lower() == "spotify" and content_type.strip().lower() == "podcast":
+        peeled = {
+            "title": (title or "").strip(),
+            "season": None,
+            "episode": None,
+            "kind": "plain",
+        }
+    else:
+        peeled = peel_log_fields(title)
     work_title = peeled["title"] or (title or "").strip() or "Unknown"
     ct = infer_content_type(
         work_title,

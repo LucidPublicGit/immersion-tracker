@@ -108,6 +108,11 @@ def create_log(
     if series_key:
         # Catalog display = work name only (not SxxExx / volume tails)
         catalog = ensure_catalog(db, series_key, title, content_type)
+        # Watched-media ingest resolves user-managed catalog names before this
+        # call. Generic work normalization must not replace that explicit name
+        # with a built-in English/romaji alias (e.g. 葬送のフリーレン → Frieren).
+        if source.strip().lower() in {"plex", "jellyfin"} and catalog.display_title:
+            title = catalog.display_title
 
     # explicit unit > catalog default_unit > content_type default
     if not unit and catalog and catalog.default_unit:

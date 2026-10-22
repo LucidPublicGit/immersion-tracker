@@ -120,8 +120,11 @@ def test_no_contest_id(tmp_path, monkeypatch):
 
 
 def test_api_upstream_status_and_force(client, tmp_path, monkeypatch):
+    from app.core.config import get_settings
     from app.tadoku import upstream_monitor as mon
 
+    monkeypatch.setattr(get_settings().yaml_config.tadoku.contest, "contest_id",
+                        "00000000-0000-0000-0000-000000000001")
     status = tmp_path / "status.json"
     monkeypatch.setattr(mon, "status_path", lambda: status)
 

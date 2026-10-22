@@ -15,11 +15,12 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.models import HoshiBookBucket, HoshiSessionFragment, LogEntry, utcnow
-from app.ingest.hoshi import series_key_for_title
+from app.ingest.hoshi import _legacy_series_key_for_title, series_key_for_title
 from app.ingest.service import DuplicateLogError, create_log
 from app.sheets.state import get_state, set_state
 from app.tadoku.rules import estimate_score
@@ -149,6 +150,35 @@ def bucket_is_idle_enough(
     return idle_s >= idle_m * 60.0
 
 
+def _bucket_series_keys(bucket: HoshiBookBucket) -> set[str]:
+    """Match generated key variants without widening catalog-linked identities."""
+    key = (bucket.series_key or "").strip()
+    generated = {
+        series_key_for_title(bucket.title),
+        _legacy_series_key_for_title(bucket.title),
+    }
+    return generated if not key or key in generated else {key}
+
+
+def _set_bucket_title(bucket: HoshiBookBucket, title: str) -> None:
+    # Poll/UI title changes must not discard an explicit catalog link.
+    generated = (bucket.series_key or "").strip() in {
+        "",
+        series_key_for_title(bucket.title),
+        _legacy_series_key_for_title(bucket.title),
+    }
+    bucket.title = title
+    if generated:
+        bucket.series_key = series_key_for_title(title)
+
+
+def _log_series_key_for_bucket(bucket: HoshiBookBucket) -> str:
+    key = (bucket.series_key or "").strip()
+    if not key or key == _legacy_series_key_for_title(bucket.title):
+        return series_key_for_title(bucket.title)
+    return key
+
+
 def get_or_create_bucket(
     db: Session,
     *,
@@ -162,8 +192,7 @@ def get_or_create_bucket(
     )
     if row:
         if title and row.title != title:
-            row.title = title
-            row.series_key = series_key_for_title(title)
+            _set_bucket_title(row, title)
             row.updated_at = utcnow()
         return row
     row = HoshiBookBucket(
@@ -403,7 +432,7 @@ def submit_bucket(
             amount=float(total_chars),
             unit=cfg.unit or "characters",
             activity="reading",
-            series_key=bucket.series_key or series_key_for_title(bucket.title),
+            series_key=_log_series_key_for_bucket(bucket),
             source_ref=source_ref,
             notes="; ".join(notes_parts),
             tags="hoshi,reading",
@@ -462,17 +491,14 @@ def discard_bucket(db: Session, bucket_id: int) -> bool:
 
 
 def _open_hoshi_logs_for_bucket(db: Session, bucket: HoshiBookBucket) -> list[LogEntry]:
-    """Hoshi character logs not yet successfully on Tadoku for this book."""
-    sk = (bucket.series_key or series_key_for_title(bucket.title or "")).strip()
+    """Unsubmitted Hoshi character logs, excluding remote IDs and queue claims."""
     q = db.query(LogEntry).filter(
         LogEntry.source == SOURCE,
         LogEntry.unit == "characters",
         LogEntry.tadoku_status.in_(["pending", "ready", "failed"]),
+        or_(LogEntry.tadoku_remote_id.is_(None), LogEntry.tadoku_remote_id == ""),
+        LogEntry.series_key.in_(_bucket_series_keys(bucket)),
     )
-    if sk:
-        q = q.filter(LogEntry.series_key == sk)
-    else:
-        return []
     return q.order_by(LogEntry.id.asc()).all()
 
 
@@ -559,7 +585,7 @@ def consolidate_bucket_for_tadoku(db: Session, bucket_id: int) -> Optional[LogEn
             amount=float(total_chars),
             unit=cfg.unit or "characters",
             activity="reading",
-            series_key=bucket.series_key or series_key_for_title(bucket.title),
+            series_key=_log_series_key_for_bucket(bucket),
             source_ref=source_ref,
             notes=notes,
             tags="hoshi,reading,combined",
@@ -671,7 +697,9 @@ def log_all_to_tadoku(db: Session) -> dict[str, Any]:
     total_failed = 0.0
     for b in list_buckets(db, pending_only=False):
         # Skip books with nothing pending and no awaiting logs
-        stats = tadoku_char_stats_for_series(db, b.series_key)
+        stats = tadoku_char_stats_for_series(
+            db, b.series_key, series_keys=_bucket_series_keys(b)
+        )
         unlogged = float(b.pending_chars or 0)
         awaiting = float(stats.get("tadoku_awaiting_chars") or 0)
         if unlogged <= 0 and awaiting <= 0:
@@ -875,13 +903,19 @@ def backfill_logged_totals_from_logs(db: Session) -> int:
     if not logs:
         return 0
 
-    # Aggregate by series_key and title
+    # Keep the same identity boundary as consolidation/history. Titles alone
+    # cannot distinguish a catalog-linked work from unrelated generated logs.
     by_series: dict[str, float] = {}
-    by_title: dict[str, float] = {}
     count_by_series: dict[str, int] = {}
     last_id_by_series: dict[str, int] = {}
-    last_pos_by_series: dict[str, int] = {}
+    last_pos_by_series: dict[str, tuple[int, int]] = {}
     for e in logs:
+        # Consolidation preserves originals for history; only their replacement
+        # carries credit. Ordinary skipped logs still represent logged reading.
+        if e.tadoku_status == "skipped" and re.search(
+            r"\[merged into log #\d+\]", e.notes or ""
+        ):
+            continue
         amt = float(e.amount or 0)
         pos = _parse_pos_from_log_notes(e.notes)
         if e.series_key:
@@ -889,43 +923,34 @@ def backfill_logged_totals_from_logs(db: Session) -> int:
             count_by_series[e.series_key] = count_by_series.get(e.series_key, 0) + 1
             last_id_by_series[e.series_key] = e.id
             if pos is not None:
-                last_pos_by_series[e.series_key] = pos
-        t = (e.title or "").strip()
-        if t:
-            by_title[t] = by_title.get(t, 0.0) + amt
+                last_pos_by_series[e.series_key] = (e.id, pos)
 
     updated = 0
     for bucket in db.query(HoshiBookBucket).all():
-        total = 0.0
-        submits = 0
-        last_id = bucket.last_log_id
+        keys = _bucket_series_keys(bucket)
+        total = sum(by_series.get(key, 0.0) for key in keys)
+        submits = sum(count_by_series.get(key, 0) for key in keys)
+        last_id = max(
+            (last_id_by_series[key] for key in keys if key in last_id_by_series),
+            default=bucket.last_log_id,
+        )
         last_pos = bucket.last_logged_position_chars
-        if bucket.series_key and bucket.series_key in by_series:
-            total = by_series[bucket.series_key]
-            submits = count_by_series.get(bucket.series_key, 0)
-            last_id = last_id_by_series.get(bucket.series_key, last_id)
-            if bucket.series_key in last_pos_by_series:
-                last_pos = last_pos_by_series[bucket.series_key]
-        elif bucket.title and bucket.title in by_title:
-            total = by_title[bucket.title]
-        else:
-            # try series_key from title
-            sk = series_key_for_title(bucket.title)
-            if sk in by_series:
-                total = by_series[sk]
-                submits = count_by_series.get(sk, 0)
-                last_id = last_id_by_series.get(sk, last_id)
-                if sk in last_pos_by_series:
-                    last_pos = last_pos_by_series[sk]
+        positions = [last_pos_by_series[key] for key in keys if key in last_pos_by_series]
+        if positions:
+            # Compare log IDs across variants, retaining insertion chronology
+            # even when imported reading timestamps or positions move backward.
+            _, last_pos = max(positions)
         changed = False
-        if abs(float(bucket.total_logged_chars or 0) - total) > 0.01 or (
-            total > 0 and int(bucket.submit_count or 0) == 0 and submits > 0
-        ):
+        if abs(float(bucket.total_logged_chars or 0) - total) > 0.01:
             bucket.total_logged_chars = total
-            if submits > int(bucket.submit_count or 0):
-                bucket.submit_count = submits
-            if last_id:
-                bucket.last_log_id = last_id
+            changed = True
+        # Preserve the historical submission count when consolidation replaces
+        # several submitted batches with one row.
+        if submits > int(bucket.submit_count or 0):
+            bucket.submit_count = submits
+            changed = True
+        if last_id is not None and bucket.last_log_id != last_id:
+            bucket.last_log_id = last_id
             changed = True
         if (
             last_pos is not None
@@ -957,8 +982,7 @@ def update_bucket_settings(
     elif min_submit_characters is not None:
         bucket.min_submit_characters = max(1, int(min_submit_characters))
     if title is not None and title.strip():
-        bucket.title = title.strip()
-        bucket.series_key = series_key_for_title(bucket.title)
+        _set_bucket_title(bucket, title.strip())
     bucket.updated_at = utcnow()
     db.commit()
     db.refresh(bucket)
@@ -972,17 +996,19 @@ _TADOKU_SKIPPED = frozenset({"skipped", "n/a", "na"})
 
 
 def list_logs_for_series(
-    db: Session, series_key: Optional[str], *, limit: int = 50
+    db: Session, series_key: Optional[str], *, limit: int = 50,
+    series_keys: Optional[set[str]] = None,
 ) -> list[dict[str, Any]]:
     """Formal immersion logs for a book (shown in Reading UI history)."""
     sk = (series_key or "").strip()
-    if not sk:
+    keys = series_keys if series_keys is not None else ({sk} if sk else set())
+    if not keys:
         return []
     rows = (
         db.query(LogEntry)
         .filter(
             LogEntry.source == SOURCE,
-            LogEntry.series_key == sk,
+            LogEntry.series_key.in_(keys),
             LogEntry.unit == "characters",
         )
         .order_by(LogEntry.timestamp.asc(), LogEntry.id.asc())
@@ -1013,7 +1039,7 @@ def list_logs_for_series(
 
 
 def tadoku_char_stats_for_series(
-    db: Session, series_key: Optional[str]
+    db: Session, series_key: Optional[str], *, series_keys: Optional[set[str]] = None,
 ) -> dict[str, float]:
     """
     Sum character amounts + score estimates from formal Hoshi LogEntries.
@@ -1032,7 +1058,8 @@ def tadoku_char_stats_for_series(
         "tadoku_log_score": 0.0,
     }
     sk = (series_key or "").strip()
-    if not sk:
+    keys = series_keys if series_keys is not None else ({sk} if sk else set())
+    if not keys:
         return empty
 
     rows = (
@@ -1043,7 +1070,7 @@ def tadoku_char_stats_for_series(
         )
         .filter(
             LogEntry.source == SOURCE,
-            LogEntry.series_key == sk,
+            LogEntry.series_key.in_(keys),
             LogEntry.unit == "characters",
         )
         .all()
@@ -1116,8 +1143,12 @@ def bucket_to_dict(
     logged = float(bucket.total_logged_chars or 0)
     # Lifetime = chars that actually became immersion logs (not unlogged buffer).
     lifetime = logged
-    tadoku = tadoku_char_stats_for_series(db, bucket.series_key)
-    formal_logs = list_logs_for_series(db, bucket.series_key) if include_sessions else []
+    keys = _bucket_series_keys(bucket)
+    tadoku = tadoku_char_stats_for_series(db, bucket.series_key, series_keys=keys)
+    formal_logs = (
+        list_logs_for_series(db, bucket.series_key, series_keys=keys)
+        if include_sessions else []
+    )
 
     unlogged_score = (
         float(estimate_score("reading", unlogged, "characters")) if unlogged > 0 else 0.0

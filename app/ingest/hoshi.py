@@ -115,7 +115,21 @@ def set_seen_chars(
 
 
 def series_key_for_title(title: str) -> str:
-    """Stable-ish series_key from book title (user can override via catalog)."""
+    """Use the same work identity as newly created Hoshi logs."""
+    from app.media.work_identity import prepare_log_identity
+
+    cfg = get_settings().yaml_config.hoshi
+    return prepare_log_identity(
+        content_type=cfg.content_type or "book",
+        title=title or "Unknown",
+        source=SOURCE,
+        unit=cfg.unit or "characters",
+        activity="reading",
+    )["series_key"]
+
+
+def _legacy_series_key_for_title(title: str) -> str:
+    """Previous generated key, retained only for matching existing records."""
     t = (title or "").strip()
     if not t:
         return "hoshi:unknown"

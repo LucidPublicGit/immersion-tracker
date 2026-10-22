@@ -277,7 +277,7 @@ def test_position_gates_reread_stats(client):
 
 
 def test_series_key_for_title():
-    assert series_key_for_title("  夜は短し歩けよ乙女  ") == "hoshi:夜は短し歩けよ乙女"
+    assert series_key_for_title("  夜は短し歩けよ乙女  ") == "book:夜は短し歩けよ乙女"
 
 
 def test_hoshi_status_endpoint(client):

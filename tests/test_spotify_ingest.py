@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
 
 from app.db.models import LogEntry
 from app.db.session import get_engine
@@ -241,6 +242,21 @@ def test_poll_logs_episode(client, monkeypatch, tmp_path):
         assert "Comprehensible Japanese" in (row.notes or "")
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("episode_name", [
+    "Nihongo Episode 12", "日本語 第3話", "Topic S02E03",
+])
+def test_episode_title_is_not_peeled_as_tv_metadata(client, monkeypatch, tmp_path, episode_name):
+    _enable_spotify(monkeypatch, tmp_path)
+    _patch_httpx(monkeypatch, recent_items=[_episode_item(episode_name=episode_name)])
+    with _db() as db:
+        assert poll_spotify(db).logs_created == 1
+        row = db.query(LogEntry).filter_by(source="spotify").one()
+        assert row.title == episode_name
+        assert row.episode is None
+        assert row.season is None
+        assert row.series_key == "spotify:show:show123"
 
 
 def test_poll_dedupe(client, monkeypatch, tmp_path):

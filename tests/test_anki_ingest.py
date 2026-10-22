@@ -275,7 +275,9 @@ def test_delta_creates_study_log(client):
         assert log.unit == "minutes"
         assert log.activity == "study"
         assert log.title == "Anki"
-        assert log.series_key == "anki"
+        # Study tools use the shared canonical namespace, not the legacy raw
+        # configuration key (which remains accepted as input).
+        assert log.series_key == "study:anki"
         assert log.amount == 2.0
         assert get_state(db, STATE_LAST_REVIEW_ID) == str(new_id_2)
 

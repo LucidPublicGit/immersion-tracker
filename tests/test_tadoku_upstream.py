@@ -131,12 +131,14 @@ def test_log_page_url_shape():
     assert up.log_page_url("  ") is None
 
 
-def test_tool_urls_use_leaderboard_page(client):
-    """UI must link to the live leaderboard path, not the bare contest 404."""
+def test_tool_urls_use_leaderboard_page(client, monkeypatch):
+    """UI links use a configured contest, independent of local settings."""
+    from app.core.config import get_settings
     from app.web.pages import _tool_urls
 
+    cid = "00000000-0000-0000-0000-000000000001"
+    monkeypatch.setattr(get_settings().yaml_config.tadoku.contest, "contest_id", cid)
     urls = _tool_urls()
-    cid = _contest_id()
     assert urls["tadoku_contest"] == up.contest_leaderboard_page_url(cid)
     assert urls["tadoku_club"] == urls["tadoku_contest"]
     assert urls["tadoku_manual"] == up.manual_log_url()

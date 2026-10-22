@@ -56,6 +56,25 @@ def test_jellyfin_playback_stop_logs(client):
     assert log["episode"] == 2
 
 
+def test_jellyfin_preserves_catalog_display_title(client):
+    created = client.post("/api/catalog", json={
+        "series_key": "anime:frieren", "display_title": "葬送のフリーレン",
+        "content_type": "anime",
+    })
+    assert created.status_code == 201
+    r = client.post("/api/webhooks/jellyfin", json={
+        "NotificationType": "PlaybackStop", "ItemId": "jf-catalog-title",
+        "Name": "E03", "SeriesName": "Frieren", "LibraryName": "Anime",
+        "ItemType": "Episode", "RunTimeTicks": EP_TICKS,
+        "PlayedToCompletion": True, "SeasonNumber": 1, "EpisodeNumber": 3,
+    })
+    assert r.json()["accepted"] is True
+    log = client.get(f"/api/logs/{r.json()['log_id']}").json()
+    assert log["title"] == "葬送のフリーレン"
+    assert log["series_key"] == "anime:frieren"
+    assert (log["season"], log["episode"]) == (1, 3)
+
+
 def test_jellyfin_movie_drops_index(client):
     r = client.post(
         "/api/webhooks/jellyfin",

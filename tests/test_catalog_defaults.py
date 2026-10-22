@@ -7,7 +7,8 @@ def test_new_catalog_defaults_unit_by_content_type(client):
         ("visual_novel", "characters"),
         ("game", "minutes"),
         ("book", "characters"),
-        ("manga", "characters"),
+        # Manga's documented default is pages; books/VNs use characters.
+        ("manga", "pages"),
         ("youtube", "minutes"),
     ]
     for ctype, expected_unit in cases:
