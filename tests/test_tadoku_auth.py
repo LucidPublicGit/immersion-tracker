@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def cred_paths(tmp_path, monkeypatch):
     from app.tadoku import credentials as cred
 
@@ -18,362 +18,214 @@ def cred_paths(tmp_path, monkeypatch):
     return data
 
 
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def cookie_path(tmp_path, monkeypatch):
     from app.tadoku import session as sess
 
     path = tmp_path / "tadoku_session.cookie"
     monkeypatch.setattr(sess, "cookie_file_path", lambda: path)
-    return path
+    monkeypatch.setattr(sess, "_login_retry_after", 0.0)
+    sess.invalidate_session_cache()
+    yield path
+    sess.invalidate_session_cache()
+
+
+@pytest.fixture()
+def mocked_http(monkeypatch):
+    """Exercise actual httpx JSON/header/cookie handling without any network."""
+    from app.tadoku import auth
+
+    real_client = httpx.Client
+    calls = []
+
+    def install(handler):
+        def respond(request):
+            calls.append(request)
+            return handler(request)
+
+        monkeypatch.setattr(auth.httpx, "Client", lambda **kwargs: real_client(
+            transport=httpx.MockTransport(respond), **kwargs
+        ))
+        monkeypatch.setattr(auth, "live_auth_blocked", lambda: False)
+        return calls
+
+    return install
 
 
 def test_missing_credentials_rejected_before_network(monkeypatch):
     from app.tadoku.auth import TadokuAuthClient, TadokuAuthenticationError
 
-    calls = []
-
     def boom(*a, **k):
-        calls.append(1)
-        raise AssertionError("network should not be called")
+        raise AssertionError("HTTP client should not be created")
 
-    monkeypatch.setattr(httpx.Client, "get", boom)
-    with pytest.raises(TadokuAuthenticationError, match="not configured"):
-        TadokuAuthClient("", "x")
-    with pytest.raises(TadokuAuthenticationError, match="not configured"):
-        TadokuAuthClient("user", "")
+    monkeypatch.setattr(httpx, "Client", boom)
+    for username, password in (("", "x"), ("user", "")):
+        with pytest.raises(TadokuAuthenticationError, match="not configured"):
+            TadokuAuthClient(username, password)
+
+
+def test_login_posts_identity_json_and_new_cookie(mocked_http, caplog):
+    from app.tadoku.auth import TadokuAuthClient
+
+    def handler(request):
+        assert request.method == "POST"
+        assert str(request.url) == "https://tadoku.app/api/internal/identity/login"
+        assert request.headers["Content-Type"] == "application/json"
+        assert request.headers["Origin"] == "https://tadoku.app"
+        assert json.loads(request.content) == {"email": "alice@example.com", "password": "secret-pw"}
+        return httpx.Response(200, headers={
+            "Set-Cookie": "tadoku_session=secret-token; Domain=tadoku.app; Path=/; Secure; HttpOnly"
+        }, json={"account": {"id": "account-id", "email": "private-email"}})
+
+    calls = mocked_http(handler)
+    with TadokuAuthClient("alice@example.com", "secret-pw") as auth:
+        assert auth.login() == "tadoku_session=secret-token"
+    assert len(calls) == 1
+    assert not any(secret in caplog.text for secret in ("secret-pw", "secret-token", "private-email"))
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 429, 503, 302])
+def test_failed_login_never_retried_or_leaks_response(mocked_http, caplog, status):
+    from app.tadoku.auth import TadokuAuthClient, TadokuAuthenticationError
+
+    calls = mocked_http(lambda request: httpx.Response(status, headers={
+        "Location": "https://evil.example/steal",
+        "Set-Cookie": "tadoku_session=response-secret; Domain=tadoku.app; Path=/"
+    }, text="response-secret password-secret"))
+    with TadokuAuthClient("u", "password-secret") as auth:
+        with pytest.raises(TadokuAuthenticationError) as error:
+            auth.request("GET", "logs")
+        assert not auth.has_session_cookie()
+    assert len(calls) == 1
+    assert "response-secret" not in str(error.value) + caplog.text
+    assert "password-secret" not in str(error.value) + caplog.text
+    if status == 429:
+        assert "15 minutes" in str(error.value)
+
+
+@pytest.mark.parametrize("cookie", [None, "ory_kratos_session=old; Domain=tadoku.app; Path=/"])
+def test_login_requires_fresh_new_cookie(mocked_http, cookie):
+    from app.tadoku.auth import TadokuAuthClient, TadokuAuthenticationError
+
+    calls = mocked_http(lambda request: httpx.Response(
+        200, headers={"Set-Cookie": cookie} if cookie else {}, json={"account": {"id": "id"}}
+    ))
+    with TadokuAuthClient("u", "p", session_cookie="tadoku_session=stale") as auth:
+        with pytest.raises(TadokuAuthenticationError, match="did not return"):
+            auth.login()
+    assert len(calls) == 1
+
+
+def test_login_transport_error_is_safe(mocked_http, caplog):
+    from app.tadoku.auth import TadokuAuthClient, TadokuAuthenticationError
+
+    def handler(request):
+        raise httpx.ConnectError("response-secret password-secret", request=request)
+
+    calls = mocked_http(handler)
+    with TadokuAuthClient("u", "password-secret") as auth:
+        with pytest.raises(TadokuAuthenticationError) as error:
+            auth.login()
+    assert len(calls) == 1
+    assert error.value.__suppress_context__
+    assert "response-secret" not in str(error.value) + caplog.text
+    assert "password-secret" not in str(error.value) + caplog.text
+
+
+def test_login_blocked_in_test_mode(mocked_http, monkeypatch):
+    from app.tadoku import auth
+
+    calls = mocked_http(lambda request: pytest.fail("must not send request"))
+    monkeypatch.setattr(auth, "live_auth_blocked", lambda: True)
+    with auth.TadokuAuthClient("u", "p") as client:
+        with pytest.raises(auth.TadokuAuthenticationError, match="blocked"):
+            client.login()
     assert calls == []
 
 
-def test_login_flow_extracts_csrf_and_posts_form(monkeypatch):
+def test_request_reuses_cookie_without_login(mocked_http):
     from app.tadoku.auth import TadokuAuthClient
 
-    monkeypatch.setattr("app.tadoku.auth.live_auth_blocked", lambda: False)
+    def handler(request):
+        assert request.method == "GET"
+        assert request.headers["Cookie"] == "tadoku_session=seeded"
+        return httpx.Response(200)
 
-    class FakeResp:
-        def __init__(self, status_code=200, payload=None, set_cookie=None):
-            self.status_code = status_code
-            self._payload = payload or {}
-            self._set_cookie = set_cookie
-            self.is_success = 200 <= status_code < 300
-            self.text = json.dumps(self._payload)
-
-        def raise_for_status(self):
-            if self.status_code >= 400:
-                raise httpx.HTTPStatusError("err", request=None, response=self)
-
-        def json(self):
-            return self._payload
-
-    posts = []
-
-    class FakeClient:
-        def __init__(self, *a, **k):
-            self.cookies = httpx.Cookies()
-            self.headers = {}
-
-        def get(self, url, **kwargs):
-            assert "self-service/login/browser" in url
-            assert kwargs.get("headers", {}).get("Accept") == "application/json"
-            return FakeResp(
-                payload={
-                    "ui": {
-                        "action": (
-                            "https://account.tadoku.app/kratos/self-service/login"
-                            "?flow=abc"
-                        ),
-                        "nodes": [
-                            {
-                                "attributes": {
-                                    "name": "csrf_token",
-                                    "value": "csrf-secret",
-                                }
-                            }
-                        ],
-                    }
-                }
-            )
-
-        def post(self, url, **kwargs):
-            posts.append({"url": url, "data": kwargs.get("data"), "headers": kwargs.get("headers")})
-            self.cookies.set(
-                "ory_kratos_session",
-                "session-tok",
-                domain=".tadoku.app",
-                path="/",
-            )
-            return FakeResp(status_code=200, payload={"session": {}})
-
-        def close(self):
-            pass
-
-        def request(self, *a, **k):
-            raise AssertionError("not used in this test")
-
-    monkeypatch.setattr(httpx, "Client", FakeClient)
-
-    with TadokuAuthClient("alice@example.com", "s3cret") as auth:
-        header = auth.login()
-    assert header == "ory_kratos_session=session-tok"
-    assert len(posts) == 1
-    data = posts[0]["data"]
-    assert data["identifier"] == "alice@example.com"
-    assert data["password"] == "s3cret"
-    assert data["method"] == "password"
-    assert data["csrf_token"] == "csrf-secret"
-    assert posts[0]["url"].startswith(
-        "https://account.tadoku.app/kratos/self-service/login?"
-    )
+    calls = mocked_http(handler)
+    with TadokuAuthClient("u", "p", "tadoku_session=seeded; ory_kratos_session=obsolete") as auth:
+        assert auth.request("GET", "logs").status_code == 200
+    assert len(calls) == 1
 
 
-def test_untrusted_action_rejected(monkeypatch):
-    from app.tadoku.auth import TadokuAuthClient, TadokuAuthenticationError
-
-    monkeypatch.setattr("app.tadoku.auth.live_auth_blocked", lambda: False)
-
-    class FakeResp:
-        status_code = 200
-        is_success = True
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                "ui": {
-                    "action": "https://evil.example/steal",
-                    "nodes": [
-                        {"attributes": {"name": "csrf_token", "value": "x"}}
-                    ],
-                }
-            }
-
-    class FakeClient:
-        def __init__(self, *a, **k):
-            self.cookies = httpx.Cookies()
-
-        def get(self, *a, **k):
-            return FakeResp()
-
-        def post(self, *a, **k):
-            raise AssertionError("must not post to untrusted action")
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(httpx, "Client", FakeClient)
-    with TadokuAuthClient("u", "p") as auth:
-        with pytest.raises(TadokuAuthenticationError, match="invalid login flow"):
-            auth.login()
-
-
-def test_missing_csrf_rejected(monkeypatch):
-    from app.tadoku.auth import TadokuAuthClient, TadokuAuthenticationError
-
-    monkeypatch.setattr("app.tadoku.auth.live_auth_blocked", lambda: False)
-
-    class FakeResp:
-        status_code = 200
-        is_success = True
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                "ui": {
-                    "action": (
-                        "https://account.tadoku.app/kratos/self-service/login?flow=1"
-                    ),
-                    "nodes": [],
-                }
-            }
-
-    class FakeClient:
-        def __init__(self, *a, **k):
-            self.cookies = httpx.Cookies()
-
-        def get(self, *a, **k):
-            return FakeResp()
-
-        def post(self, *a, **k):
-            raise AssertionError("no csrf")
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(httpx, "Client", FakeClient)
-    with TadokuAuthClient("u", "p") as auth:
-        with pytest.raises(TadokuAuthenticationError, match="CSRF"):
-            auth.login()
-
-
-def test_invalid_credentials_safe_error(monkeypatch):
-    from app.tadoku.auth import TadokuAuthClient, TadokuAuthenticationError
-
-    monkeypatch.setattr("app.tadoku.auth.live_auth_blocked", lambda: False)
-
-    class FlowResp:
-        status_code = 200
-        is_success = True
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                "ui": {
-                    "action": (
-                        "https://account.tadoku.app/kratos/self-service/login?flow=1"
-                    ),
-                    "nodes": [
-                        {"attributes": {"name": "csrf_token", "value": "csrf"}}
-                    ],
-                }
-            }
-
-    class BadLogin:
-        status_code = 400
-        is_success = False
-        text = "password wrong secret-should-not-leak"
-
-    class FakeClient:
-        def __init__(self, *a, **k):
-            self.cookies = httpx.Cookies()
-
-        def get(self, *a, **k):
-            return FlowResp()
-
-        def post(self, *a, **k):
-            return BadLogin()
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(httpx, "Client", FakeClient)
-    with TadokuAuthClient("u", "super-secret-password") as auth:
-        with pytest.raises(TadokuAuthenticationError) as ei:
-            auth.login()
-    msg = str(ei.value)
-    assert "super-secret-password" not in msg
-    assert "login failed" in msg.lower()
-
-
-def test_request_reuses_cookie_without_login(monkeypatch):
+@pytest.mark.parametrize("retry_status", [200, 401])
+def test_request_401_relogin_once(mocked_http, retry_status):
     from app.tadoku.auth import TadokuAuthClient
 
-    monkeypatch.setattr("app.tadoku.auth.live_auth_blocked", lambda: False)
-    login_calls = []
+    def handler(request):
+        if request.url.path.endswith("/identity/login"):
+            return httpx.Response(200, headers={
+                "Set-Cookie": "tadoku_session=fresh; Domain=tadoku.app; Path=/"
+            })
+        if request.headers["Cookie"] == "tadoku_session=old":
+            return httpx.Response(401)
+        assert request.headers["Cookie"] == "tadoku_session=fresh"
+        return httpx.Response(retry_status)
 
-    class FakeResp:
-        def __init__(self, code=200):
-            self.status_code = code
-            self.is_success = code < 400
-            self.text = "{}"
-
-        def json(self):
-            return {"units": []}
-
-    class FakeClient:
-        def __init__(self, *a, **k):
-            self.cookies = httpx.Cookies()
-            self.cookies.set(
-                "ory_kratos_session", "seeded", domain=".tadoku.app", path="/"
-            )
-
-        def get(self, *a, **k):
-            login_calls.append("get")
-            return FakeResp()
-
-        def post(self, *a, **k):
-            login_calls.append("post")
-            return FakeResp()
-
-        def request(self, method, url, **kwargs):
-            login_calls.append(("request", method, url))
-            return FakeResp(200)
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(httpx, "Client", FakeClient)
-    with TadokuAuthClient("u", "p", session_cookie="ory_kratos_session=seeded") as auth:
-        # Re-seed after Client init (FakeClient replaces jar)
-        auth.client.cookies.set(
-            "ory_kratos_session", "seeded", domain=".tadoku.app", path="/"
-        )
-        r = auth.request("GET", "logs/configuration-options")
-    assert r.status_code == 200
-    assert not any(c in ("get", "post") for c in login_calls)
-    assert any(isinstance(c, tuple) and c[0] == "request" for c in login_calls)
+    calls = mocked_http(handler)
+    with TadokuAuthClient("u", "p", "tadoku_session=old") as auth:
+        assert auth.request("GET", "logs").status_code == retry_status
+    assert [r.method for r in calls] == ["GET", "POST", "GET"]
 
 
-def test_request_401_relogin_once(monkeypatch):
+@pytest.mark.parametrize("status", [403, 429, 500])
+def test_request_reauthenticates_only_on_401(mocked_http, status):
     from app.tadoku.auth import TadokuAuthClient
 
-    monkeypatch.setattr("app.tadoku.auth.live_auth_blocked", lambda: False)
-    state = {"n": 0, "logins": 0}
+    calls = mocked_http(lambda request: httpx.Response(status))
+    with TadokuAuthClient("u", "p", "tadoku_session=old") as auth:
+        assert auth.request("GET", "logs").status_code == status
+    assert len(calls) == 1
 
-    class FakeResp:
-        def __init__(self, code=200, payload=None):
-            self.status_code = code
-            self.is_success = 200 <= code < 300
-            self._payload = payload or {}
-            self.text = json.dumps(self._payload)
 
-        def raise_for_status(self):
-            if self.status_code >= 400:
-                raise httpx.HTTPStatusError("e", request=None, response=self)
+def test_failed_relogin_stops_request_retry(mocked_http):
+    from app.tadoku.auth import TadokuAuthClient, TadokuAuthenticationError
 
-        def json(self):
-            return self._payload
+    calls = mocked_http(lambda request: httpx.Response(401))
+    with TadokuAuthClient("u", "p", "tadoku_session=old") as auth:
+        with pytest.raises(TadokuAuthenticationError):
+            auth.request("POST", "logs", json={"amount": 1})
+    assert [r.method for r in calls] == ["POST", "POST"]
+    assert calls[0].url.path.endswith("/immersion/logs")
+    assert calls[1].url.path.endswith("/identity/login")
 
-    class FakeClient:
-        def __init__(self, *a, **k):
-            self.cookies = httpx.Cookies()
-            self.cookies.set(
-                "ory_kratos_session", "old", domain=".tadoku.app", path="/"
-            )
 
-        def get(self, *a, **k):
-            state["logins"] += 1
-            return FakeResp(
-                payload={
-                    "ui": {
-                        "action": (
-                            "https://account.tadoku.app/kratos/self-service/login"
-                            "?flow=1"
-                        ),
-                        "nodes": [
-                            {"attributes": {"name": "csrf_token", "value": "c"}}
-                        ],
-                    }
-                }
-            )
+@pytest.mark.parametrize("value,expected", [
+    ("raw-token", "tadoku_session=raw-token"),
+    ("Cookie: tadoku_session=token; other=x", "tadoku_session=token"),
+    ("ory_kratos_session=old", ""),
+    ("Cookie: ory_kratos_session=old; other=x", ""),
+    ("unknown=token", ""),
+    ("tadoku_session=", ""),
+    ("tadoku_session=x\r\nInjected: yes", ""),
+])
+def test_cookie_normalization_rejects_legacy(value, expected):
+    from app.tadoku.auth import format_session_cookie_header
 
-        def post(self, *a, **k):
-            self.cookies.set(
-                "ory_kratos_session", "new", domain=".tadoku.app", path="/"
-            )
-            return FakeResp(200, {"ok": True})
+    assert format_session_cookie_header(value) == expected
 
-        def request(self, method, url, **kwargs):
-            state["n"] += 1
-            if state["n"] == 1:
-                return FakeResp(401)
-            return FakeResp(200, {"units": []})
 
-        def close(self):
-            pass
+def test_ensure_cookie_reuses_cookie_without_credentials(cred_paths, monkeypatch):
+    from app.tadoku.auth import ensure_session_cookie
 
-    monkeypatch.setattr(httpx, "Client", FakeClient)
-    with TadokuAuthClient("u", "p", session_cookie="ory_kratos_session=old") as auth:
-        auth.client.cookies.set(
-            "ory_kratos_session", "old", domain=".tadoku.app", path="/"
-        )
-        r = auth.request("GET", "logs/configuration-options")
-    assert r.status_code == 200
-    assert state["logins"] == 1
-    assert state["n"] == 2
+    monkeypatch.setattr("app.tadoku.auth.login_and_get_cookie", lambda *args: pytest.fail("no login"))
+    assert ensure_session_cookie(existing_cookie="tadoku_session=cached") == "tadoku_session=cached"
+
+
+def test_ensure_cookie_does_not_relabel_legacy(cred_paths):
+    from app.tadoku.auth import ensure_session_cookie, TadokuAuthenticationError
+
+    with pytest.raises(TadokuAuthenticationError, match="not configured"):
+        ensure_session_cookie(existing_cookie="ory_kratos_session=obsolete")
 
 
 def test_credentials_encrypt_and_never_return_password(cred_paths):
@@ -446,7 +298,7 @@ def test_post_credentials_and_clear(client, cred_paths, cookie_path, monkeypatch
 
     monkeypatch.setattr(cred, "_data_dir", lambda: cred_paths)
     monkeypatch.setattr(sess, "cookie_file_path", lambda: cookie_path)
-    cookie_path.write_text("ory_kratos_session=old\n", encoding="utf-8")
+    cookie_path.write_text("tadoku_session=old\n", encoding="utf-8")
 
     r = client.post(
         "/api/tadoku/credentials",
@@ -496,7 +348,7 @@ def test_refresh_persists_cookie_and_hides_secrets(
     def fake_login(username, password):
         assert username == "erin"
         assert password == "pw"
-        return "ory_kratos_session=fresh-tok"
+        return "tadoku_session=fresh-tok"
 
     monkeypatch.setattr(
         "app.tadoku.auth.login_and_get_cookie",
@@ -521,7 +373,7 @@ def test_refresh_persists_cookie_and_hides_secrets(
     assert body["authenticated"] is True
     assert "fresh-tok" not in json.dumps(body)
     assert "pw" not in json.dumps(body)
-    assert "ory_kratos_session=fresh-tok" in cookie_path.read_text(encoding="utf-8")
+    assert "tadoku_session=fresh-tok" in cookie_path.read_text(encoding="utf-8")
 
 
 def test_failed_refresh_keeps_previous_cookie(
@@ -534,7 +386,7 @@ def test_failed_refresh_keeps_previous_cookie(
     monkeypatch.setattr(cred, "_data_dir", lambda: cred_paths)
     monkeypatch.setattr(sess, "cookie_file_path", lambda: cookie_path)
     cred.save_credentials("erin", "pw")
-    cookie_path.write_text("ory_kratos_session=keep-me\n", encoding="utf-8")
+    cookie_path.write_text("tadoku_session=keep-me\n", encoding="utf-8")
 
     def boom(*a, **k):
         raise TadokuAuthenticationError("Tadoku login failed; check the saved username and password")
@@ -543,7 +395,7 @@ def test_failed_refresh_keeps_previous_cookie(
 
     r = client.post("/api/tadoku/auth/refresh")
     assert r.status_code == 400
-    assert cookie_path.read_text(encoding="utf-8").strip() == "ory_kratos_session=keep-me"
+    assert cookie_path.read_text(encoding="utf-8").strip() == "tadoku_session=keep-me"
 
 
 def test_queue_ui_has_refresh_button():
@@ -582,7 +434,7 @@ def test_changing_username_invalidates_cookie(
     monkeypatch.setattr(cred, "_data_dir", lambda: cred_paths)
     monkeypatch.setattr(sess, "cookie_file_path", lambda: cookie_path)
     cred.save_credentials("old", "pw")
-    cookie_path.write_text("ory_kratos_session=x\n", encoding="utf-8")
+    cookie_path.write_text("tadoku_session=x\n", encoding="utf-8")
 
     r = client.post(
         "/api/tadoku/credentials",

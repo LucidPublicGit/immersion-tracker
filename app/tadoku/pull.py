@@ -406,20 +406,23 @@ def fetch_remote_logs(
 
     logs: list[dict[str, Any]] = []
     page = 0
+    refreshed = False
     with httpx.Client(timeout=40.0, headers=headers, follow_redirects=True) as client:
         while page < max_pages:
             r = client.get(
                 f"{_api_base()}/users/{user_id}/logs",
                 params={"page": page, "page_size": page_size},
             )
-            if r.status_code in (401, 403):
-                # Public list sometimes works without auth; if blocked, re-login once
+            if r.status_code == 401 and not refreshed:
+                # Refresh once for the whole paginated read, never for a 403.
+                refreshed = True
                 try:
                     new_cookie = ensure_session(force_login=True)
                 except Exception:  # noqa: BLE001
                     new_cookie = ""
                 if new_cookie:
                     headers["Cookie"] = new_cookie
+                    client.headers["Cookie"] = new_cookie
                     r = client.get(
                         f"{_api_base()}/users/{user_id}/logs",
                         params={"page": page, "page_size": page_size},

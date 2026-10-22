@@ -18,7 +18,7 @@ class TadokuCookieIn(BaseModel):
 
 class TadokuCredentialsIn(BaseModel):
     """
-    Tadoku username/password for automatic browser login.
+    Tadoku email/password for automatic identity login (username is the legacy field name).
 
     Omit password or send blank to keep the previously saved password.
     """

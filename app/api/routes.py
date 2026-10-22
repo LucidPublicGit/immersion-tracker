@@ -442,7 +442,7 @@ def tadoku_credentials_clear():
 @router.post("/tadoku/auth/refresh")
 def tadoku_auth_refresh():
     """
-    Force browser login with saved credentials and persist a new session cookie.
+    Force identity login with saved email/password and persist a new session cookie.
 
     Does not overwrite the previous cookie until login succeeds.
     Returns {authenticated: true} without secrets.

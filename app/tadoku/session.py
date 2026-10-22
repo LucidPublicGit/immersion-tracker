@@ -1,14 +1,14 @@
 """
 Tadoku session cookie resolution + health checks + credential-driven refresh.
 
-Auth is a browser Cookie (Ory Kratos). Preferred path: save username/password
-(encrypted); the app obtains and refreshes `ory_kratos_session` automatically.
-Legacy env/file cookie still works as a fallback seed.
+Saved credentials obtain a ``tadoku_session`` cookie. New session cookies can
+also be supplied through a file, environment variable or configuration.
 """
 from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -18,6 +18,7 @@ from typing import Any, Optional
 import httpx
 
 from app.core.config import get_settings
+from app.tadoku.auth import format_session_cookie_header
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,8 @@ def _live_submit_blocked() -> bool:
     return flag in _TRUTHY
 
 
-# Probe that requires a logged-in session (same family as live submit).
-_PROBE_PATH = "/contests/ongoing-registrations"
+# A 200 identity response can still mean signed out (account: null).
+_PROBE_PATH = "/identity/session"
 
 # Avoid hammering tadoku.app from the queue UI / settings polls.
 _CACHE_TTL_OK_SEC = 300.0
@@ -44,6 +45,10 @@ _cache: Optional["SessionHealth"] = None
 _cache_mono: float = 0.0
 # Prevent concurrent auto-login storms
 _login_lock = threading.Lock()
+# Survives health-cache invalidations, so scheduled checks cannot retry failed
+# credentials every minute. Explicit refresh and credential changes reset it.
+_LOGIN_FAILURE_COOLDOWN_SEC = 15 * 60.0
+_login_retry_after: float = 0.0
 
 
 def cookie_file_path() -> Path:
@@ -54,7 +59,7 @@ def cookie_file_path() -> Path:
     return Path("data/tadoku_session.cookie")
 
 
-def resolve_cookie() -> str:
+def _resolved_cookie() -> tuple[str, str]:
     """
     Cookie string for live Tadoku HTTP calls.
 
@@ -66,40 +71,53 @@ def resolve_cookie() -> str:
     path = cookie_file_path()
     try:
         if path.is_file():
-            text = path.read_text(encoding="utf-8").strip()
+            text = format_session_cookie_header(path.read_text(encoding="utf-8"))
             if text:
-                return text
+                return text, "file"
     except OSError:
         logger.debug("could not read tadoku cookie file", exc_info=True)
 
     settings = get_settings()
     cfg = settings.yaml_config.tadoku
     env_name = cfg.session_cookie_env or "TADOKU_COOKIE"
-    return (
-        os.environ.get(env_name, "").strip()
-        or os.environ.get("TADOKU_SESSION_COOKIE", "").strip()
-        or (cfg.session_cookie or "").strip()
-    )
+    for value, source in (
+        (os.environ.get(env_name, ""), "env"),
+        (os.environ.get("TADOKU_SESSION_COOKIE", ""), "env"),
+        (cfg.session_cookie or "", "yaml"),
+    ):
+        cookie = format_session_cookie_header(value)
+        if cookie:
+            return cookie, source
+    return "", "none"
+
+
+def resolve_cookie() -> str:
+    """Return only a usable new session cookie, never a legacy Kratos cookie."""
+    return _resolved_cookie()[0]
 
 
 def save_cookie(cookie: str) -> Path:
     """Persist session cookie for live submit (never log the value)."""
-    cleaned = (cookie or "").strip()
-    if cleaned.lower().startswith("cookie:"):
-        cleaned = cleaned[7:].strip()
+    cleaned = format_session_cookie_header(cookie)
     if not cleaned:
-        raise ValueError("cookie is empty")
+        raise ValueError("A tadoku_session cookie is required; sign in again on tadoku.app")
     path = cookie_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(cleaned + "\n", encoding="utf-8")
+    # Create with private permissions before writing any secret; replace atomically
+    # so failures preserve the previous cookie, including on an existing 0644 file.
+    fd, temporary = tempfile.mkstemp(prefix=".tadoku-session-", dir=path.parent)
     try:
-        import stat
-
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(cleaned + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     invalidate_session_cache()
-    logger.info("tadoku session cookie saved to %s (len=%s)", path, len(cleaned))
+    logger.info("tadoku session cookie saved")
     return path
 
 
@@ -118,22 +136,7 @@ def clear_cookie_file() -> bool:
 
 def cookie_source() -> str:
     """Where the active cookie came from (never returns secret value)."""
-    path = cookie_file_path()
-    try:
-        if path.is_file() and path.read_text(encoding="utf-8").strip():
-            return "file"
-    except OSError:
-        pass
-    settings = get_settings()
-    cfg = settings.yaml_config.tadoku
-    env_name = cfg.session_cookie_env or "TADOKU_COOKIE"
-    if os.environ.get(env_name, "").strip() or os.environ.get(
-        "TADOKU_SESSION_COOKIE", ""
-    ).strip():
-        return "env"
-    if (cfg.session_cookie or "").strip():
-        return "yaml"
-    return "none"
+    return _resolved_cookie()[1]
 
 
 def invalidate_saved_session() -> None:
@@ -143,6 +146,9 @@ def invalidate_saved_session() -> None:
     """
     clear_cookie_file()
     invalidate_session_cache()
+    global _login_retry_after
+    with _login_lock:
+        _login_retry_after = 0.0
 
 
 def ensure_session(*, force_login: bool = False) -> str:
@@ -150,18 +156,19 @@ def ensure_session(*, force_login: bool = False) -> str:
     Return a session cookie, logging in with saved credentials when needed.
 
     - force_login=False: reuse saved cookie if present; otherwise login
-    - force_login=True: always browser-login and replace cookie only on success
+    - force_login=True: sign in again and replace cookie only on success
+    Automatic calls respect a cooldown after failed sign-in, including 401 retries.
     """
     from app.tadoku.auth import TadokuAuthenticationError, ensure_session_cookie
     from app.tadoku.credentials import credentials_configured
+
+    global _login_retry_after
 
     existing = resolve_cookie()
     if existing and not force_login:
         return existing
 
     if not credentials_configured():
-        if existing and not force_login:
-            return existing
         raise TadokuAuthenticationError(
             "Tadoku username and password are not configured"
         )
@@ -172,23 +179,34 @@ def ensure_session(*, force_login: bool = False) -> str:
         if existing and not force_login:
             return existing
 
-        # Do not overwrite an existing cookie until the new login succeeds
-        cookie = ensure_session_cookie(
-            force_login=True,
-            existing_cookie="" if force_login else existing,
-        )
+        if time.monotonic() < _login_retry_after:
+            raise TadokuAuthenticationError(
+                "Tadoku automatic login paused after a failed attempt; wait 15 minutes "
+                "or check credentials and use Refresh Tadoku login"
+            )
+        try:
+            cookie = ensure_session_cookie(
+                force_login=True,
+                existing_cookie="" if force_login else existing,
+            )
+        except TadokuAuthenticationError:
+            _login_retry_after = time.monotonic() + _LOGIN_FAILURE_COOLDOWN_SEC
+            raise
         save_cookie(cookie)
+        _login_retry_after = 0.0
         return cookie
 
 
 def refresh_login() -> dict[str, Any]:
     """
-    Force browser login with saved credentials; persist replacement cookie.
+    Force sign-in with saved credentials; persist replacement cookie.
     Does not clear the previous cookie until login succeeds.
     Returns a safe public dict (no secrets).
     """
     from app.tadoku.auth import TadokuAuthenticationError, login_and_get_cookie
     from app.tadoku.credentials import load_credentials
+
+    global _login_retry_after
 
     username, password = load_credentials()
     if not username or not password:
@@ -198,12 +216,19 @@ def refresh_login() -> dict[str, Any]:
 
     with _login_lock:
         # Keep previous cookie file intact until new login succeeds
-        new_cookie = login_and_get_cookie(username, password)
+        try:
+            new_cookie = login_and_get_cookie(username, password)
+        except TadokuAuthenticationError:
+            _login_retry_after = time.monotonic() + _LOGIN_FAILURE_COOLDOWN_SEC
+            raise
         save_cookie(new_cookie)
+        _login_retry_after = 0.0
 
     health = check_session(force=True)
     return {
-        "authenticated": health.status == "ok" or bool(resolve_cookie()),
+        "authenticated": health.status == "ok" or (
+            health.status in ("skipped", "disabled") and bool(resolve_cookie())
+        ),
         **session_public_dict(force_check=False),
     }
 
@@ -347,7 +372,7 @@ def check_session(*, force: bool = False) -> SessionHealth:
                 checked_at=now_iso,
                 detail=(
                     "Save Tadoku username and password to enable live submit "
-                    "(automatic browser login)"
+                    "(automatic sign-in)"
                 ),
                 live_submit=live,
             )
@@ -355,6 +380,8 @@ def check_session(*, force: bool = False) -> SessionHealth:
         return health
 
     api_base = (cfg.api_base or "https://tadoku.app/api/internal/immersion").rstrip("/")
+    if api_base.endswith("/immersion"):
+        api_base = api_base[:-len("/immersion")]
     url = f"{api_base}{_PROBE_PATH}"
     headers = {
         "Cookie": cookie,
@@ -364,9 +391,18 @@ def check_session(*, force: bool = False) -> SessionHealth:
         "User-Agent": "immersion-tracker/session-check",
     }
     try:
-        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+        with httpx.Client(timeout=15.0, follow_redirects=False) as client:
             r = client.get(url, headers=headers)
-        if r.status_code in (401, 403):
+        signed_out = False
+        if r.status_code == 200:
+            payload = r.json()
+            if not isinstance(payload, dict) or "account" not in payload:
+                raise ValueError("invalid identity session response")
+            account = payload["account"]
+            if account is not None and (not isinstance(account, dict) or not account.get("id")):
+                raise ValueError("invalid identity session account")
+            signed_out = account is None
+        if r.status_code == 401 or signed_out:
             detail = "Session cookie rejected (expired)."
             if creds_ok:
                 detail += " Will re-login automatically on next sync, or use Refresh Tadoku login."
@@ -381,7 +417,7 @@ def check_session(*, force: bool = False) -> SessionHealth:
                 http_status=r.status_code,
                 live_submit=live,
             )
-        elif r.status_code >= 400:
+        elif r.status_code != 200:
             health = SessionHealth(
                 status="error",
                 configured=True,

@@ -1,0 +1,36 @@
+# Only application build inputs belong in the Docker context. Runtime data and
+# config/settings.yaml are mounted at deployment, never baked into image layers.
+**
+!Dockerfile
+!requirements.txt
+!docker-entrypoint.sh
+!app/
+!app/**
+!config/
+config/**
+!config/settings.example.yaml
+!scripts/
+!scripts/**
+
+# Explicit runtime exclusions also protect against directory re-inclusion rules.
+.env
+.env.*
+data
+data.*
+config/settings.yaml
+config/tailscale
+
+# Exclude generated files and local companions even within allowed source trees.
+**/__pycache__
+**/*.py[cod]
+**/*.local.*
+**/*.log
+**/*.db*
+**/*.sqlite*
+**/*.pem
+**/*.key
+**/*credentials*.json
+**/*service-account*.json
+**/*oauth*token*.json
+**/*oauth*client*.json
+**/*spotify*token*.json

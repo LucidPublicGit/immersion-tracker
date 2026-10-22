@@ -103,29 +103,34 @@ When `auto_submit_on_approve: true`:
 
 | Need | Where |
 |------|--------|
-| Tadoku username + password | Queue UI **Save login**, or env `TADOKU_USERNAME` / `TADOKU_PASSWORD` |
+| Tadoku email + password (or a current session cookie) | Queue UI **Save login**, or env `TADOKU_USERNAME` / `TADOKU_PASSWORD` |
 | Your registration UUID for that contest | `tadoku.contest.registration_id` |
 
-Without credentials (or a legacy cookie), Approve will fail live submit (status
-`failed`) and still write a local export under `data/tadoku_export/`.
+With `live_submit: true` but no usable credentials or current `tadoku_session`
+cookie, Approve fails live submit (status `failed`) and still writes a local
+export under `data/tadoku_export/`. Missing or obsolete credentials never silently
+switch a live submission into a successful export.
 
 ---
 
-## 1. Tadoku login (username / password)
+## 1. Tadoku login (email / password)
 
-Tadoku immersion API auth is a **browser session cookie** (`ory_kratos_session` from
-Ory Kratos). You no longer need to copy that cookie from DevTools.
+Tadoku now uses its own **session cookie** (`tadoku_session`), not Ory Kratos.
+Old `ory_kratos_session` cookies cannot be migrated or renamed: sign in again.
+Your account ID, password, logs, registrations and immersion API endpoints are unchanged.
+The app obtains a cookie through `POST /api/internal/identity/login` with JSON
+`email` / `password` and `Origin: https://tadoku.app`. You need not copy it from DevTools.
 
 ### Recommended: Queue UI credentials
 
 1. Open http://127.0.0.1:8000/queue  
-2. Enter your **tadoku.app username or email** and **password**  
+2. Enter your **tadoku.app email address** (the existing username field stores this) and **password**
 3. Click **Save login** (password is **encrypted at rest** under `data/`)  
 4. Click **Refresh Tadoku login** to verify (optional — sync also logs in on demand)
 
 The app:
 
-- Performs the Tadoku **browser** login flow automatically  
+- Performs the Tadoku **JSON identity login** automatically
 - Stores the resulting session cookie in `data/tadoku_session.cookie`  
 - Reuses that cookie until Tadoku returns **401**, then re-logins once  
 - **Never** returns the password or session cookie from settings APIs  
@@ -134,25 +139,38 @@ The app:
 |---------|----------|
 | `data/tadoku_credentials.json` | Username + Fernet-encrypted password |
 | `data/tadoku_credentials.key` | Local encryption key (gitignored, volume-mounted) |
-| `data/tadoku_session.cookie` | Internal `ory_kratos_session` (auto-managed) |
+| `data/tadoku_session.cookie` | Internal `tadoku_session` (auto-managed; owner-readable only) |
 
 ### Env fallbacks (optional)
 
 ```env
 TADOKU_USERNAME=you@example.com
 TADOKU_PASSWORD=your-password
-# Legacy only — prefer username/password above:
-# TADOKU_COOKIE=ory_kratos_session=...
+# Optional manual cookie — prefer email/password above:
+# TADOKU_COOKIE=tadoku_session=...
 ```
 
 UI-saved credentials take priority over env when both are present.
+`TADOKU_USERNAME` remains the compatibility setting name; its value must be your email.
+Alternatively, sign in at https://tadoku.app and copy only the `tadoku_session`
+cookie into the manual-cookie setting. Sessions expire **30 days after sign-in**;
+using them does not extend their lifetime. Password changes/resets can invalidate them sooner.
+Never put real credentials or cookies in Git or logs.
 
 ### Session health
 
 - `GET /api/tadoku/settings` includes `session_status`, `tadoku_username`,
   `tadoku_credentials_configured` (never password / cookie value)
 - `GET /api/tadoku/settings?check_session=1` forces a fresh probe
-- Live submit **401/403** → mark expired → automatic re-login once on next submit
+- Identity health is checked with `GET /api/internal/identity/session`;
+  HTTP 200 with `account: null` means **not signed in**
+- Authenticated requests returning **401** may re-login and retry **once**
+- Failed logins are not retried automatically: **401** means check email/password,
+  **403** means invalid origin, **429** means wait at least 15 minutes, and
+  **503** means try later. Reuse sessions; do not sign in for every request/run.
+  Tadoku allows 10 login attempts per email and 50 per IP in 15 minutes,
+  including successful logins.
+- Do not use `Authorization` or `X-Session-Token`; Tadoku only reads the cookie
 - Queue UI banner when login or session is missing/expired
 
 ```powershell
@@ -161,7 +179,7 @@ curl -X POST http://127.0.0.1:8000/api/tadoku/credentials `
   -H "Content-Type: application/json" `
   -d "{\"username\":\"you@example.com\",\"password\":\"your-password\"}"
 
-# Force a new browser session (does not echo secrets)
+# Force a new Tadoku session (does not echo secrets)
 curl -X POST http://127.0.0.1:8000/api/tadoku/auth/refresh
 
 # Clear username, password, and session together

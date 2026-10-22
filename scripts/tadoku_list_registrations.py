@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from http.cookies import SimpleCookie
 from pathlib import Path
 
 import httpx
@@ -31,14 +32,14 @@ def load_cookie() -> str:
     ):
         try:
             if path.is_file():
-                text = path.read_text(encoding="utf-8").strip()
+                text = normalize_cookie(path.read_text(encoding="utf-8"))
                 if text:
                     return text
         except OSError:
             pass
 
     for key in ("TADOKU_COOKIE", "TADOKU_SESSION_COOKIE"):
-        c = os.environ.get(key, "").strip()
+        c = normalize_cookie(os.environ.get(key, ""))
         if c:
             return c
 
@@ -46,15 +47,35 @@ def load_cookie() -> str:
     if env_path.is_file():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("TADOKU_COOKIE="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
+                cookie = normalize_cookie(line.split("=", 1)[1].strip().strip('"').strip("'"))
+                if cookie:
+                    return cookie
     return ""
 
 
+def normalize_cookie(raw: str) -> str:
+    """Send only the new session cookie; obsolete Kratos tokens cannot migrate."""
+    raw = raw.strip()
+    if raw.lower().startswith("cookie:"):
+        raw = raw.split(":", 1)[1].strip()
+    if not raw or "\r" in raw or "\n" in raw:
+        return ""
+    if "=" not in raw:
+        return f"tadoku_session={raw}"
+    jar = SimpleCookie()
+    try:
+        jar.load(raw)
+    except Exception:
+        return ""
+    token = jar.get("tadoku_session")
+    return f"tadoku_session={token.value}" if token and token.value else ""
+
+
 def main() -> int:
-    cookie = load_cookie()
+    cookie = normalize_cookie(load_cookie())
     if not cookie:
         print(
-            "No Tadoku session found.\n"
+            "No current Tadoku session found (old Kratos cookies no longer work).\n"
             "  1. Open http://127.0.0.1:8000/queue → Save login\n"
             "  2. Re-run this script (reads data/tadoku_session.cookie)\n"
             "Or set TADOKU_COOKIE in .env (legacy).",
@@ -71,18 +92,17 @@ def main() -> int:
     r = httpx.get(API, headers=headers, timeout=30.0, follow_redirects=True)
     print(f"HTTP {r.status_code}  {API}")
     if r.status_code != 200:
-        print(r.text[:800])
         print(
-            "\nIf 401: cookie expired or incomplete. Re-copy Cookie from DevTools "
-            "while logged into tadoku.app, update .env, try again.",
+            "\nIf 401: sign in again via Queue → Refresh Tadoku login, or copy a new "
+            "tadoku_session cookie from tadoku.app. Sessions last 30 days.",
             file=sys.stderr,
         )
         return 1
 
     data = r.json()
-    regs = data.get("registrations") or data.get("Registrations") or []
-    if isinstance(data, list):
-        regs = data
+    regs = data if isinstance(data, list) else (
+        data.get("registrations") or data.get("Registrations") or []
+    )
 
     if not regs and isinstance(data, dict):
         # dump keys to help debug shape

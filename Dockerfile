@@ -14,7 +14,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY config ./config
+# Runtime settings and Tailscale configuration are host-mounted, not image inputs.
+COPY config/settings.example.yaml ./config/settings.example.yaml
 COPY scripts ./scripts
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh \

@@ -101,7 +101,7 @@ class TadokuClient:
 
     API (from open source tadoku monorepo):
       POST {api_base}/logs
-      Auth: browser session cookie (Ory / tadoku.app)
+      Auth: tadoku_session cookie (tadoku.app identity API)
     """
 
     def __init__(
@@ -116,11 +116,9 @@ class TadokuClient:
             "/"
         )
         if dry_run is None:
-            # Live when live_submit is on and we have a cookie or saved credentials
-            from app.tadoku.credentials import credentials_configured
-
-            can_auth = bool(self._cookie()) or credentials_configured()
-            dry_run = not (cfg.live_submit and can_auth)
+            # Missing/rejected credentials must fail a live submission, not turn
+            # it into a successful export that the queue would mark as pushed.
+            dry_run = not cfg.live_submit
         # Tests / explicit dry-run env must never hit tadoku.app even if cookie leaks in
         if live_submit_blocked():
             dry_run = True
@@ -141,7 +139,7 @@ class TadokuClient:
     def _cookie_for_submit(self) -> str:
         """
         Prefer an existing session cookie; if missing and credentials exist,
-        perform browser login once and persist the new cookie.
+        perform identity login once and persist the new cookie.
         """
         cookie = self._cookie()
         if cookie:
@@ -477,7 +475,7 @@ class TadokuClient:
                 return resp, req_body
 
         r, body = _post(cookie)
-        if r.status_code in (401, 403):
+        if r.status_code == 401:
             mark_session_invalid(
                 f"submit HTTP {r.status_code}",
                 http_status=r.status_code,
@@ -485,7 +483,7 @@ class TadokuClient:
             new_cookie = self._relogin_after_401()
             if new_cookie:
                 r, body = _post(new_cookie)
-            if r.status_code in (401, 403):
+            if r.status_code == 401:
                 mark_session_invalid(
                     f"submit HTTP {r.status_code} after re-login",
                     http_status=r.status_code,

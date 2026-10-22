@@ -652,8 +652,9 @@ function paintSessionBanner(s){
     ?'Password saved (leave blank to keep)'
     :'Tadoku password';
   const how=`Save your <a href="https://tadoku.app" target="_blank" rel="noopener">tadoku.app</a>
-    username and password. The app signs in automatically and keeps a session cookie
-    (never shown here). Save credentials before using <b>Refresh Tadoku login</b>.`;
+    email address and password. The app signs in automatically and reuses a 30-day session cookie
+    (never shown here). Old Kratos cookies no longer work. Save credentials before using
+    <b>Refresh Tadoku login</b>; avoid repeated refreshes (Tadoku limits sign-in attempts).`;
   ban.innerHTML=`
     <div class="session-banner-text"><b>${escapeHtml(sessionLabel(s))}</b>
       · ${escapeHtml(authLabel(s))}
@@ -661,7 +662,7 @@ function paintSessionBanner(s){
     <form class="session-banner-form" id="tadoku-login-form" autocomplete="on"
       onsubmit="return saveTadokuCredentials(event)">
       <input type="text" id="tadoku-username" name="username" autocomplete="username"
-        spellcheck="false" placeholder="username or email" value="${user}" />
+        spellcheck="false" placeholder="Tadoku email address" value="${user}" />
       <input type="password" id="tadoku-password" name="password"
         autocomplete="current-password" spellcheck="false"
         placeholder="${escapeHtml(pwHint)}" />
@@ -700,7 +701,7 @@ async function saveTadokuCredentials(ev){
   const passEl=document.getElementById('tadoku-password');
   const username=(userEl&&userEl.value||'').trim();
   const password=passEl?passEl.value:'';
-  if(!username){ setMsg('Enter Tadoku username or email'); return false; }
+  if(!username){ setMsg('Enter Tadoku email address'); return false; }
   setMsg('Saving login…');
   const body={username};
   // Blank password = keep previously saved password (do not send empty wipe)
@@ -748,7 +749,7 @@ async function refreshTadokuLogin(){
   }
 }
 async function clearTadokuLogin(){
-  if(!confirm('Clear saved Tadoku username, password, and session?')) return;
+  if(!confirm('Clear saved Tadoku email, password, and session?')) return;
   setMsg('Clearing login…');
   const r=await fetch('/api/tadoku/credentials',{method:'DELETE'});
   let j=null;

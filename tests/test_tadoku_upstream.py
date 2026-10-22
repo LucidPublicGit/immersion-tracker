@@ -7,7 +7,7 @@ path/API drift (e.g. contest page 404) fails with a clear error.
 If tadoku.app is unreachable, tests are skipped (not failed).
 
 Optional auth-gated probes run when a session cookie is available via:
-  IMMERSION_TADOKU_UPSTREAM_COOKIE=ory_kratos_session=...
+  IMMERSION_TADOKU_UPSTREAM_COOKIE=tadoku_session=...
 or data/tadoku_session.cookie (local Docker volume). Without a cookie those
 probes skip with a warning.
 
@@ -95,7 +95,7 @@ def _optional_session_cookie() -> str:
     """Cookie for auth-gated GETs (never used to POST)."""
     env = (os.environ.get("IMMERSION_TADOKU_UPSTREAM_COOKIE") or "").strip()
     if env:
-        return env if "=" in env else f"ory_kratos_session={env}"
+        return env if "=" in env else f"tadoku_session={env}"
     for p in (
         Path("data/tadoku_session.cookie"),
         Path("/app/data/tadoku_session.cookie"),
@@ -103,7 +103,7 @@ def _optional_session_cookie() -> str:
         if p.is_file():
             raw = p.read_text(encoding="utf-8").strip()
             if raw:
-                return raw if "=" in raw else f"ory_kratos_session={raw}"
+                return raw if "=" in raw else f"tadoku_session={raw}"
     return ""
 
 
@@ -273,20 +273,13 @@ def test_live_api_user_activity():
 
 
 @pytest.mark.tadoku_upstream
-def test_live_kratos_login_browser_reachable():
-    """Auth bootstrap endpoint used by app.tadoku.auth."""
-    r = _get(
-        up.kratos_login_browser_url(),
-        accept_statuses=(200, 303, 422),  # Kratos may return flow JSON or redirect
-    )
-    # 422 can still mean "flow created" depending on Accept; 200 with flow id is ideal
-    if r.status_code == 200:
-        try:
-            data = r.json()
-            assert "id" in data or "ui" in data or "error" in data
-        except ValueError:
-            # HTML login page is also fine
-            assert len(r.content) > 100
+def test_live_identity_session_reachable():
+    """Check the new identity contract without signing in or creating sessions."""
+    r = _get(up.identity_session_url())
+    data = r.json()
+    assert "account" in data
+    assert data["account"] is None  # no cookie is sent by this probe
+    assert data.get("account_app") == "v2"
 
 
 # ---------------------------------------------------------------------------

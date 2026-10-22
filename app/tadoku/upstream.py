@@ -15,7 +15,7 @@ from typing import Any
 
 TADOKU_ORIGIN = "https://tadoku.app"
 DEFAULT_API_BASE = f"{TADOKU_ORIGIN}/api/internal/immersion"
-ACCOUNT_ORIGIN = "https://account.tadoku.app"
+IDENTITY_API_BASE = f"{TADOKU_ORIGIN}/api/internal/identity"
 
 
 def manual_log_url() -> str:
@@ -89,9 +89,9 @@ def api_ongoing_registrations_path() -> str:
     return "/contests/ongoing-registrations"
 
 
-def kratos_login_browser_url() -> str:
-    """Ory Kratos browser login bootstrap (auth flow)."""
-    return f"{ACCOUNT_ORIGIN}/kratos/self-service/login/browser"
+def identity_session_url() -> str:
+    """GET-only session check; account is null when unauthenticated."""
+    return f"{IDENTITY_API_BASE}/session"
 
 
 def join_api(api_base: str, path: str) -> str:
