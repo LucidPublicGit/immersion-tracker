@@ -15,7 +15,7 @@ let lastSettings = {
   threshold: 0.9,
   preferJapanese: true,
 };
-let lastScanMetaHtml = "";
+let lastScanMetaText = "";
 let scanning = false;
 let logging = false;
 let persistTimer = null;
@@ -24,7 +24,7 @@ let sectionCollapsed = false;
 const SCAN_CACHE_KEY = "historyScanCache";
 const SCAN_CACHE_TTL_MS = 7 * 86400000;
 /** Drop scans from before the active-session account fix (those labeled the wrong history). */
-const SCAN_CACHE_REVISION = 2;
+const SCAN_CACHE_REVISION = 3;
 const COLLAPSED_KEY = "historyImportCollapsed";
 
 function importUiPresent() {
@@ -288,7 +288,7 @@ function renderList() {
   const hasScan =
     readyCandidates.length > 0 ||
     unfinishedCandidates.length > 0 ||
-    !!lastScanMetaHtml;
+    !!lastScanMetaText;
   if (card) {
     if (compact) card.hidden = !hasScan && !scanning && total === 0;
     else card.hidden = total === 0 && !scanning && !hasScan;
@@ -299,17 +299,19 @@ function renderList() {
 
   if (!list.length) {
     if (compact) {
-      ul.innerHTML =
-        unfinishedCandidates.length > 0
-          ? '<li class="empty">No ready videos. ' +
-            unfinishedCandidates.length +
-            ' unfinished — use <strong>Full page</strong>.</li>'
-          : '<li class="empty">No ready videos. Scan history or open Full page.</li>';
+      const empty = document.createElement("li");
+      empty.className = "empty";
+      empty.textContent = unfinishedCandidates.length > 0
+        ? "No ready videos. " + unfinishedCandidates.length + " unfinished — use Full page."
+        : "No ready videos. Scan history or open Full page.";
+      ul.replaceChildren(empty);
     } else {
-      ul.innerHTML =
-        activeTab === "unfinished"
-          ? '<li class="empty">No unfinished / short videos in this window.</li>'
-          : '<li class="empty">No ready videos. Check the Unfinished tab, lengthen lookback, or relax filters.</li>';
+      const empty = document.createElement("li");
+      empty.className = "empty";
+      empty.textContent = activeTab === "unfinished"
+        ? "No unfinished / short videos in this window."
+        : "No ready videos. Check the Unfinished tab, lengthen lookback, or relax filters.";
+      ul.replaceChildren(empty);
     }
     updateSummary();
     return;
@@ -432,7 +434,7 @@ function renderList() {
 async function refreshServerChip() {
   try {
     const base = (cachedSettings.serverUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
-    const r = await fetch(base + "/api/health");
+    const r = await trackerFetch(base + "/api/health");
     if (r.ok) setServerChip("ok", "Server OK");
     else setServerChip("err", "Server " + r.status);
   } catch (_) {
@@ -469,7 +471,7 @@ async function persistScanCache() {
     activeTab,
     viewer: lastViewer,
     settings: lastSettings,
-    metaHtml: lastScanMetaHtml,
+    metaText: lastScanMetaText,
     candidates: readyCandidates,
     unfinished: unfinishedCandidates,
   };
@@ -516,18 +518,17 @@ function applyScanResult(res, opts) {
   const meta = document.getElementById("scanMeta");
   if (meta) {
     meta.hidden = false;
-    if (fromCache && res.metaHtml) {
-      meta.innerHTML = res.metaHtml;
-      lastScanMetaHtml = res.metaHtml;
+    if (fromCache && res.metaText) {
+      meta.textContent = res.metaText;
+      lastScanMetaText = res.metaText;
     } else {
       const sessionNote =
         res.authUser != null && res.authUser !== ""
-          ? " · session " + escapeHtml(String(res.authUser))
+          ? " · session " + String(res.authUser)
           : "";
-      lastScanMetaHtml =
-        "Account: <strong>" +
-        escapeHtml(viewerLabel) +
-        "</strong>" +
+      lastScanMetaText =
+        "Account: " +
+        viewerLabel +
         sessionNote +
         " · lookback " +
         (res.lookbackDays != null ? res.lookbackDays : readLookbackDays()) +
@@ -562,8 +563,8 @@ function applyScanResult(res, opts) {
               ? " (" + res.enrich.remaining + " still unknown)"
               : "")
           : "") +
-        (fromCache ? " · <em>restored from last scan</em>" : "");
-      meta.innerHTML = lastScanMetaHtml;
+        (fromCache ? " · restored from last scan" : "");
+      meta.textContent = lastScanMetaText;
     }
   }
 
@@ -628,7 +629,6 @@ async function scan() {
 
   const lookbackDays = readLookbackDays();
   const applyFilters = readApplyFilters();
-  await persistImportSettings();
   if (typeof grantConfiguredServer === "function") {
     const granted = await grantConfiguredServer();
     if (!granted) {
@@ -640,6 +640,7 @@ async function scan() {
   }
 
   try {
+    await persistImportSettings();
     const res = await runtimeSend({
       type: "HISTORY_SCAN",
       opts: { lookbackDays, applyFilters },
@@ -793,7 +794,7 @@ async function restoreScanCache() {
     const hasRows =
       (Array.isArray(cache.candidates) && cache.candidates.length) ||
       (Array.isArray(cache.unfinished) && cache.unfinished.length) ||
-      cache.metaHtml;
+      cache.metaText;
     if (!hasRows) return false;
     applyScanResult(
       {
@@ -804,7 +805,7 @@ async function restoreScanCache() {
         unfinished: cache.unfinished || [],
         skipped: {},
         lookbackDays: cache.lookbackDays,
-        metaHtml: cache.metaHtml,
+        metaText: cache.metaText,
       },
       { fromCache: true, activeTab: cache.activeTab }
     );

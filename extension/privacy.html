@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lucid Immersion Tracker — Privacy</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <h1>Privacy</h1>
+      <p>This extension tracks YouTube immersion and sends watch records to the Immersion Tracker server you configure.</p>
+      <h2>Data used</h2>
+      <p>Watch records contain video IDs and URLs, titles, channel information, video duration, watch progress, timestamps, and your YouTube viewer channel ID or handle when available. History import reads your signed-in YouTube history when you request a scan and lets you review videos before logging them.</p>
+      <p>The extension makes HTTPS requests to YouTube using your existing signed-in session to retrieve account, history, and video information. It does not send your YouTube session cookies to your tracker. Your configured webhook secret is sent to your tracker to authenticate watch records.</p>
+      <h2>Storage and recipients</h2>
+      <p>Settings, the webhook secret, watch queue, scan results, and deduplication records are stored in this browser profile using local extension storage. The extension does not use browser cloud sync or third-party analytics. YouTube thumbnail requests also contact Google's image servers.</p>
+      <p>Tracker data goes to your configured server. The server operator controls its retention, backups, and any configured integrations. Remote tracker connections require HTTPS. HTTP is supported only for a tracker on localhost.</p>
+      <h2>Your controls</h2>
+      <p>Use Enabled in Settings to pause logging. History scanning is initiated by you. Remove the extension to remove its browser storage; removing it does not delete records already stored on your tracker. Manage or delete those records on your tracker separately.</p>
+      <p>The signed Firefox release requires Firefox's data-transmission consent during installation and does not run in private browsing windows.</p>
+      <p><a href="settings.html">Back to Settings</a></p>
+    </main>
+  </body>
+</html>

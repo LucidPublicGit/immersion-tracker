@@ -202,7 +202,7 @@ async function load() {
   const base = baseUrlFromForm();
   setServerChip("warn", "…");
   try {
-    const health = await fetch(base + "/api/health", { method: "GET" });
+    const health = await trackerFetch(base + "/api/health", { method: "GET" });
     if (health.ok) {
       setServerChip("ok", "online");
       // Auto-fill empty viewer/channel allowlists from server
@@ -299,8 +299,9 @@ for (const id of AUTO_SAVE_IDS) {
 
 document.getElementById("save").addEventListener("click", async () => {
   try {
+    // Request permission before any await so Firefox retains the click gesture.
+    const granted = await requestHostIfNeeded(validatedServerUrl(readFormConfig().serverUrl));
     const data = await persistSettings();
-    const granted = await requestHostIfNeeded(data.serverUrl);
     if (!granted) {
       setStatus(
         "Saved locally, but host permission denied. Allow the prompt for LAN servers.",
@@ -328,7 +329,7 @@ document.getElementById("test").addEventListener("click", async () => {
   const base = baseUrlFromForm();
   setServerChip("warn", "…");
   try {
-    const health = await fetch(base + "/api/health", { method: "GET" });
+    const health = await trackerFetch(base + "/api/health", { method: "GET" });
     if (health.ok) {
       setServerChip("ok", "online");
       await pullServerAllowlists({ force: false });

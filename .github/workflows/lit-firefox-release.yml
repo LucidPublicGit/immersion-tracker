@@ -1,0 +1,62 @@
+name: Release LiT Firefox
+
+on:
+  push:
+    branches: [main]
+    paths: [extension/manifest.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lit-firefox-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check signing configuration
+        shell: pwsh
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+          WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+        run: |
+          if (!$env:WEB_EXT_API_KEY -or !$env:WEB_EXT_API_SECRET) {
+            throw 'Add WEB_EXT_API_KEY and WEB_EXT_API_SECRET to repository Actions secrets, then rerun this workflow.'
+          }
+      - name: Regression checks
+        run: node --test tests/extension-release.test.cjs tests/extension-updates.test.cjs
+      - name: Build Firefox package
+        shell: pwsh
+        run: |
+          ./scripts/pack-extension.ps1 -FirefoxRelease
+          Expand-Archive dist/immersion-tracker-youtube-firefox-unsigned.zip dist/firefox-staging
+          git archive --format=zip --output=dist/lit-source.zip HEAD extension scripts/pack-extension.ps1 docs/YOUTUBE_EXTENSION_REVIEW.md
+          if ($LASTEXITCODE -ne 0) { throw 'Source archive failed' }
+      - name: Validate package
+        run: npx --yes web-ext@10.8.0 lint --source-dir dist/firefox-staging --self-hosted --warnings-as-errors
+      - name: Sign with Mozilla
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+          WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+        run: npx --yes web-ext@10.8.0 sign --channel=unlisted --source-dir dist/firefox-staging --artifacts-dir dist/signed --upload-source-code dist/lit-source.zip --approval-timeout 900000
+      - name: Publish signed download and update feed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish-extension.ps1
+      - name: Retain release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lit-firefox-${{ github.run_id }}
+          path: |
+            dist/signed/*.xpi
+            dist/updates.json
+          if-no-files-found: ignore

@@ -18,6 +18,26 @@ function isLoopbackServer(url) {
   }
 }
 
+/** Never send tracker activity or credentials over a remote plaintext connection. */
+function validatedServerUrl(value) {
+  const url = new URL(String(value || "http://127.0.0.1:8000").trim());
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("Server URL must not contain credentials, a query, or a fragment.");
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackServer(url.href))) {
+    throw new Error("Use HTTPS for a remote tracker. HTTP is allowed only on localhost.");
+  }
+  return url.href.replace(/\/$/, "");
+}
+
+function trackerFetch(url, options) {
+  const target = new URL(url);
+  validatedServerUrl(target.origin);
+  if (target.username || target.password) throw new Error("Credentials must not be embedded in tracker URLs.");
+  // Do not follow an HTTPS endpoint redirect to an insecure destination.
+  return fetch(url, Object.assign({}, options, { redirect: "error" }));
+}
+
 /**
  * Optional per-machine tracker origin. The file is gitignored so a tailnet
  * hostname never enters the public repo. Missing file means "no override".
@@ -52,21 +72,23 @@ async function ensureDeployedServer() {
     /\/$/,
     ""
   );
+  validatedServerUrl(current);
   if (!isLoopbackServer(current)) return current;
   try {
-    const local = await fetch(current + "/api/health", { cache: "no-store" });
+    const local = await trackerFetch(current + "/api/health", { cache: "no-store" });
     if (local.ok) return current;
   } catch (_) {}
   const deployed = await localDeployedServerUrl();
   if (!deployed) return current;
+  validatedServerUrl(deployed);
   await storageSet({ serverUrl: deployed });
   return deployed;
 }
 
 /** Call from a click handler before talking to a non-localhost tracker. */
-async function grantConfiguredServer() {
-  const base = await ensureDeployedServer();
-  if (!base || isLoopbackServer(base)) return true;
+function grantConfiguredServer() {
+  // Do not await discovery here: Firefox requires the original click gesture.
+  const base = validatedServerUrl(baseUrlFromForm());
   return requestHostIfNeeded(base);
 }
 
@@ -643,6 +665,7 @@ function applyConfigToForm(cfg) {
 
 async function persistSettings(opts) {
   const data = readFormConfig(opts);
+  data.serverUrl = validatedServerUrl(data.serverUrl);
   await storageSet(data);
   cachedSettings = Object.assign({}, defaults, cachedSettings, data);
   updateSecretUi();
@@ -1292,7 +1315,7 @@ async function refreshServerAndHistory() {
   renderActivity(window.__activityRenderOpts || {});
 
   try {
-    const health = await fetch(base + "/api/health", { method: "GET" });
+    const health = await trackerFetch(base + "/api/health", { method: "GET" });
     if (!health.ok) {
       setServerChip("err", "HTTP " + health.status);
       lastLogsCache = [];
@@ -1308,7 +1331,7 @@ async function refreshServerAndHistory() {
   }
 
   try {
-    const r = await fetch(base + "/api/logs?source=youtube&limit=50", { method: "GET" });
+    const r = await trackerFetch(base + "/api/logs?source=youtube&limit=50", { method: "GET" });
     if (!r.ok) {
       lastLogsCache = [];
       renderActivity(window.__activityRenderOpts || {});
@@ -1331,7 +1354,7 @@ async function clearHistoryList() {
   }
   if (!lastLogsCache.length) {
     try {
-      const r = await fetch(baseUrlFromForm() + "/api/logs?source=youtube&limit=50", {
+      const r = await trackerFetch(baseUrlFromForm() + "/api/logs?source=youtube&limit=50", {
         method: "GET",
       });
       if (r.ok) {

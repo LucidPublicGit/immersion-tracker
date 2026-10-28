@@ -56,7 +56,7 @@ Creates `dist\immersion-tracker-youtube.zip` and `.xpi`. Copy `extension\` or th
 
 1. Reload temporary each session (simplest).
 2. Firefox Developer Edition / Nightly: `xpinstall.signatures.required` = `false`, then install unsigned `.xpi`.
-3. Sign via [addons.mozilla.org](https://addons.mozilla.org) (unlisted) for permanent install on release Firefox.
+3. Sign via [addons.mozilla.org](https://addons.mozilla.org) (unlisted) for permanent install on release Firefox. Build the submission candidate with `./scripts/pack-extension.ps1 -FirefoxRelease`; see [publishing instructions and remaining review concerns](../docs/YOUTUBE_EXTENSION_PUBLISHING.md). The generated XPI is unsigned until Mozilla signs it.
 
 ---
 
@@ -171,3 +171,5 @@ Stored in **`browser.storage.local`**.
 - Runs only on YouTube hosts in the manifest.
 - Sends watch metadata only to **your** configured Immersion Tracker URL.
 - No third-party analytics.
+- Remote tracker connections require HTTPS; HTTP is supported only on localhost.
+- The signed Firefox release requires Firefox 140+ on desktop and cannot run in private windows. Its data disclosure is available from Settings → Privacy.

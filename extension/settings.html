@@ -171,7 +171,8 @@
             </label>
             <p class="hint">
               Base URL of the running tracker. When the app is on the Mac mini, use its
-              Tailscale URL. <code>127.0.0.1:8000</code> is only for a tracker running on this PC.
+                HTTPS Tailscale URL. Remote trackers require HTTPS; HTTP is allowed only on localhost.
+                <code>127.0.0.1:8000</code> is only for a tracker running on this PC.
             </p>
 
             <label class="field" for="webhookSecret">
@@ -226,6 +227,7 @@
         </details>
 
         <div class="links">
+          <a href="privacy.html">Privacy</a>
           <a href="#" id="linkHistory">Activity history</a>
           <a id="linkHome" href="#" target="_blank" rel="noopener">Dashboard</a>
           <a id="linkQueue" href="#" target="_blank" rel="noopener">Tadoku queue</a>

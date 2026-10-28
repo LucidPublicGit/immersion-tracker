@@ -563,12 +563,13 @@ try {
         base = await ensureDeployedServer();
       } catch (_) {}
     }
+    base = validatedServerUrl(base);
     const url = base + "/api/webhooks/youtube";
     const headers = { "Content-Type": "application/json" };
     if (cfg && cfg.webhookSecret) {
       headers["X-Webhook-Secret"] = cfg.webhookSecret;
     }
-    const r = await fetch(url, {
+    const r = await trackerFetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
@@ -2176,7 +2177,7 @@ try {
   }
 
   async function checkServerKnownIds(serverUrl, videoIds) {
-    const base = String(serverUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+    const base = validatedServerUrl(serverUrl);
     if (!videoIds.length) return { known: {}, unknown: [] };
     // Chunk to stay under API max 500
     const known = {};
@@ -2185,7 +2186,7 @@ try {
     for (let i = 0; i < videoIds.length; i += chunkSize) {
       const chunk = videoIds.slice(i, i + chunkSize);
       try {
-        const r = await fetch(base + "/api/youtube/check-ids", {
+        const r = await trackerFetch(base + "/api/youtube/check-ids", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ video_ids: chunk }),
@@ -2465,10 +2466,10 @@ try {
       threshold: 0.9,
       minWatchedSeconds: 300,
     });
-    const base = String(stored.serverUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+    const base = validatedServerUrl(stored.serverUrl);
     let body;
     try {
-      const r = await fetch(base + "/api/youtube/extension-config", {
+      const r = await trackerFetch(base + "/api/youtube/extension-config", {
         method: "GET",
         cache: "no-store",
       });
