@@ -71,10 +71,11 @@ Stable feed URL:
 
 The public repository hosts downloads without authentication. Only release
 packages include the feed URL; the development manifest remains unchanged.
-Add repository Actions secrets `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET` from
-the owning Mozilla account, then run **Release LiT Firefox**. Do not put these
-values in chat, source files, or build archives. The first candidate is 1.10.5
-and includes the permission timing correction.
+Repository Actions secrets `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET` are
+configured and successfully signed release 1.10.5. Do not ask the user to
+recreate them unless authentication fails. Do not put their values in chat,
+source files, or build archives. Release 1.10.5 includes the permission timing
+correction.
 
 After the first workflow succeeds, install its versioned signed XPI through
 Firefox's **Install Add-on From File**. Keep the same add-on ID and verify
@@ -82,19 +83,25 @@ settings afterward. Future releases require a version bump and push; Firefox
 then discovers them without another manual install. Test a subsequent release
 using **Check for Updates** before considering the full path verified.
 
-## Remaining setup
+## Verified release and handoff — October 28, 2026
 
-- Obtain API credentials for the Mozilla account that owns this add-on. Keep
-  them in a local secret store or CI secrets, outside source and build archives.
-  [Mozilla signing setup](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/)
-- GitHub Releases is the selected HTTPS host. Verify the first published feed
-  and signed download from outside an authenticated GitHub session.
-- Confirm its listed/unlisted distribution status in the owning AMO account.
-  Installed identity/version and absent update URL are already verified.
-- Perform the one-time bootstrap installation, then test a subsequent version
-  via Firefox's add-on update check. Mozilla signing/review can delay release;
-  do not advertise artifacts before signing succeeds.
+- [Release workflow 40648456419](https://github.com/LucidPublicGit/immersion-tracker/actions/runs/40648456419)
+  completed successfully, including six regression checks, lint, Mozilla
+  unlisted signing, versioned download publication, and feed publication.
+- [Signed 1.10.5 XPI](https://github.com/LucidPublicGit/immersion-tracker/releases/download/lit-firefox-v1.10.5/lit-firefox-1.10.5.xpi)
+  and the feed were fetched without authentication. The downloaded XPI's
+  SHA-256 matched the feed; its manifest had the expected ID, version, and
+  update URL, and Mozilla signature metadata was present.
+- The signed file also exists locally at `dist/lit-firefox-1.10.5-signed.xpi`
+  (gitignored). Prefer the public signed download for installation.
+- The user was instructed to install this signed build once through Firefox's
+  **Install Add-on From File**. If a temporary copy is loaded, restart Firefox
+  first. Do not uninstall the permanent add-on or clear its saved settings.
+- User completion of that installation, live history import after the fix,
+  and an actual subsequent Firefox-driven update remain unverified.
 
-No Mozilla signing submission or browser installation was performed during
-the initial investigation. Track first-release verification separately from
-the prepared automation.
+For future extension fixes, bump the version and push to `main`; changes to
+the manifest trigger the workflow. A manual workflow dispatch is available,
+but do not resubmit an already-published version. Signing/review can delay
+publication. Do not claim success until the workflow and anonymous feed/download
+checks pass. Documentation-only changes do not trigger a release.

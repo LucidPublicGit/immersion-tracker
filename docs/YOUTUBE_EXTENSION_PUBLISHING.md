@@ -1,5 +1,11 @@
 # YouTube extension: permanent Firefox installation
 
+**Current status (October 28, 2026):** unlisted signing and automatic release
+hosting are configured and verified for 1.10.5. Use
+[the automatic-update runbook](YOUTUBE_EXTENSION_AUTO_UPDATES.md) for future
+releases. The initial-submission instructions below describe earlier setup;
+do not recreate signing credentials or manually resubmit existing versions.
+
 Research checked October 26, 2026. Recommendation: use **Mozilla signing with
 unlisted distribution** for personal installation. A public store listing is
 optional. A signed XPI installs normally and persists across Firefox restarts;
