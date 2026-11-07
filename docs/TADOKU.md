@@ -245,12 +245,22 @@ tadoku:
 | Our field | Tadoku API |
 |-----------|------------|
 | listening + minutes | `activity_id: 2`, `duration_seconds: amount*60` |
-| reading + pages | `activity_id: 1`, `amount` + `unit_id` (looked up) |
+| reading + pages | `activity_id: 1`, `amount` + `unit_key: pages` |
 | title + season + episode | `description`: e.g. `KonoSuba S01E02` |
 | contest.registration_id | `registration_ids: […]` |
 | language | `language_code: jpn` |
 
-Tags: content type + series slug.
+Tags: content type only.
+
+Current API contract: `unit_key` is `pages`, `characters`, or `sentences`
+for reading/writing amounts. Timed logs send only `duration_seconds`, without
+`amount`, `unit_id`, or `unit_key`. Legacy `unit_ids` settings are ignored.
+Unsupported amount units fail locally rather than being submitted with a guessed unit.
+Imports prefer `unit_key` and convert duration-only logs to local minutes.
+
+Source: [Tadoku OpenAPI](https://github.com/tadoku/tadoku/blob/main/services/tadoku-api/spec/openapi/schemas/immersion-logs.yaml)
+and [unit catalog](https://github.com/tadoku/tadoku/blob/main/services/tadoku-api/domain/activities/units.go),
+reviewed 2026-11-06.
 
 ---
 

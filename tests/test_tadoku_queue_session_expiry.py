@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 API = "https://tadoku.app/api/internal/immersion"
 LOGIN = "https://tadoku.app/api/internal/identity/login"
 REMOTE_ID = "10000000-0000-4000-8000-000000000001"
-UNIT_ID = "20000000-0000-4000-8000-000000000002"
 EMAIL = "queue-regression@example.invalid"
 PASSWORD = "synthetic-test-password"
 EXPIRED = "tadoku_session=synthetic-expired"
@@ -111,11 +110,6 @@ def expiry_handler(state, *, login_status=200, return_cookie=True, retry_status=
 
     def handle(request):
         url = str(request.url)
-        if request.method == "GET" and url == f"{API}/logs/configuration-options":
-            assert request.headers["Cookie"] == EXPIRED
-            return httpx.Response(200, json={"units": [
-                {"id": UNIT_ID, "name": "minute", "log_activity_id": 2},
-            ]})
         if request.method == "POST" and url == LOGIN:
             assert sum(str(r.url) == LOGIN for r in state.calls) == 1
             assert request.headers["Content-Type"] == "application/json"
@@ -132,8 +126,8 @@ def expiry_handler(state, *, login_status=200, return_cookie=True, retry_status=
                 assert claimed.tadoku_status == "ready"
                 assert claimed.tadoku_remote_id.startswith("submitting:")
             body = json.loads(request.content)
-            assert body["amount"] == 24
-            assert body["unit_id"] == UNIT_ID
+            assert body["duration_seconds"] == 24 * 60
+            assert not {"amount", "unit_id", "unit_key"} & body.keys()
             assert body["language_code"] == "jpn"
             if request.headers["Cookie"] == EXPIRED:
                 return httpx.Response(401)
@@ -167,7 +161,6 @@ def test_expired_session_refreshes_once_and_queue_does_not_duplicate(queue_sessi
     assert state.entry.tadoku_status == "pushed"
     assert state.entry.tadoku_remote_id == REMOTE_ID  # actual API id, never export-*
     assert request_sequence(state) == [
-        ("GET", f"{API}/logs/configuration-options"),
         ("POST", f"{API}/logs"), ("POST", LOGIN), ("POST", f"{API}/logs"),
     ]
     posts = [r for r in state.calls if str(r.url) == f"{API}/logs"]
@@ -180,16 +173,16 @@ def test_expired_session_refreshes_once_and_queue_does_not_duplicate(queue_sessi
 
     assert queue.process_ready(state.db, client=submitter)["results"] == []
     assert queue.approve(state.db, state.entry.id).tadoku_remote_id == REMOTE_ID
-    assert len(state.calls) == 4
+    assert len(state.calls) == 3
     assert len(list(state.export_dir.glob("*.json"))) == 1
 
 
 @pytest.mark.parametrize("login_status,return_cookie,retry_status,expected_requests", [
-    pytest.param(401, True, 200, 3, id="wrong-password"),
-    pytest.param(429, True, 200, 3, id="identity-rate-limited"),
-    pytest.param(503, True, 200, 3, id="identity-unavailable"),
-    pytest.param(200, False, 200, 3, id="identity-without-cookie"),
-    pytest.param(200, True, 401, 4, id="retry-still-unauthorized"),
+    pytest.param(401, True, 200, 2, id="wrong-password"),
+    pytest.param(429, True, 200, 2, id="identity-rate-limited"),
+    pytest.param(503, True, 200, 2, id="identity-unavailable"),
+    pytest.param(200, False, 200, 2, id="identity-without-cookie"),
+    pytest.param(200, True, 401, 3, id="retry-still-unauthorized"),
 ])
 def test_failed_session_refresh_releases_queue_claim_for_retry(
     queue_session, login_status, return_cookie, retry_status, expected_requests, caplog,
@@ -213,10 +206,9 @@ def test_failed_session_refresh_releases_queue_claim_for_retry(
     assert state.entry in queue.list_queue(state.db, status="failed")
     assert "HTTP 401" in state.entry.notes
     expected_sequence = [
-        ("GET", f"{API}/logs/configuration-options"),
         ("POST", f"{API}/logs"), ("POST", LOGIN),
     ]
-    if expected_requests == 4:
+    if expected_requests == 3:
         expected_sequence.append(("POST", f"{API}/logs"))
         assert state.cookie_path.read_text().strip() == FRESH
     else:
@@ -233,7 +225,7 @@ def test_failed_session_refresh_releases_queue_claim_for_retry(
     assert retried.tadoku_status == "ready"
     assert retried.tadoku_remote_id is None
 
-    if expected_requests == 3:
+    if expected_requests == 2:
         # Even explicitly requeued work cannot hammer rejected credentials during
         # the automatic-login cooldown or turn an audit export into "pushed".
         result = queue.process_ready(state.db, client=submitter)
@@ -250,11 +242,6 @@ def test_failed_session_refresh_releases_queue_claim_for_retry(
     ))
 
     def recovered(request):
-        if request.method == "GET" and str(request.url) == f"{API}/logs/configuration-options":
-            assert request.headers["Cookie"] == FRESH
-            return httpx.Response(200, json={"units": [
-                {"id": UNIT_ID, "name": "minute", "log_activity_id": 2},
-            ]})
         assert request.method == "POST" and str(request.url) == f"{API}/logs"
         assert request.headers["Cookie"] == FRESH
         return httpx.Response(200, json={"id": REMOTE_ID})
@@ -268,6 +255,6 @@ def test_failed_session_refresh_releases_queue_claim_for_retry(
     assert result["failed"] == 0
     assert state.entry.tadoku_status == "pushed"
     assert state.entry.tadoku_remote_id == REMOTE_ID
-    assert len(state.calls) == expected_requests + 2
+    assert len(state.calls) == expected_requests + 1
     assert queue.process_ready(state.db, client=submitter)["results"] == []
-    assert len(state.calls) == expected_requests + 2
+    assert len(state.calls) == expected_requests + 1

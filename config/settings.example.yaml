@@ -125,7 +125,6 @@ tadoku:
     # UUID from URL /contests/{id}/leaderboard/1
     contest_id: ""  # UUID from /contests/{id}/leaderboard
     registration_id: ""
-  unit_ids: {}
 
 # Media metadata for Progress covers / episode totals
 metadata:

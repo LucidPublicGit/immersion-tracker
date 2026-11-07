@@ -441,7 +441,7 @@ class TadokuConfig(BaseModel):
     # Auto-discovered from data/tadoku_export when empty.
     user_id: str = ""
     contest: TadokuContestConfig = Field(default_factory=TadokuContestConfig)
-    # Optional unit UUID overrides: minutes / page / comic page / character
+    # Legacy settings accepted for compatibility; UUID unit overrides are ignored.
     unit_ids: dict[str, str] = Field(default_factory=dict)
 
 

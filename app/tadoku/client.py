@@ -131,7 +131,6 @@ class TadokuClient:
                 docker if docker.parent.is_dir() else Path("data/tadoku_export")
             )
         self.export_dir.mkdir(parents=True, exist_ok=True)
-        self._unit_cache: Optional[dict[str, str]] = None
 
     def _cookie(self) -> str:
         return resolve_cookie()
@@ -270,75 +269,23 @@ class TadokuClient:
                 description = f"{description} {link}".strip()
         return description
 
-    def _fetch_units(self, client: httpx.Client) -> dict[str, str]:
-        """Map unit name lower -> unit uuid for current activity context."""
-        if self._unit_cache is not None:
-            return self._unit_cache
-        r = client.get(f"{self.api_base}/logs/configuration-options")
-        r.raise_for_status()
-        data = r.json()
-        mapping: dict[str, str] = {}
-        for u in data.get("units") or []:
-            name = (u.get("name") or "").strip().lower()
-            uid = u.get("id")
-            act = u.get("log_activity_id")
-            if name and uid:
-                mapping[f"{act}:{name}"] = uid
-                mapping.setdefault(name, uid)
-                # also index singular/plural-ish keys
-                if name.endswith("s") and len(name) > 2:
-                    mapping.setdefault(name[:-1], uid)
-                    if act is not None:
-                        mapping.setdefault(f"{act}:{name[:-1]}", uid)
-        self._unit_cache = mapping
-        logger.info("Tadoku units loaded: %s", sorted({k for k in mapping if ":" not in k}))
-        return mapping
-
-    def _resolve_unit_id(
-        self, client: httpx.Client, entry: LogEntry, activity_id: int
-    ) -> Optional[str]:
-        # Config override
-        overrides = self.cfg.unit_ids or {}
-        unit_name = (entry.unit or "minutes").lower().replace("_", " ").strip()
-        # normalize local unit names → tadoku.app unit names
-        # comic_pages removed upstream: map to page (manga tag carries medium)
+    def _resolve_unit_key(self, entry: LogEntry, activity_id: int) -> str:
+        """Canonical amount keys are scoped to reading/writing, never UUIDs."""
+        unit = (entry.unit or "").lower().replace("_", " ").strip()
         aliases = {
-            "minutes": "minute",
-            "minute": "minute",
-            "min": "minute",
-            "pages": "page",
-            "page": "page",
-            "comic pages": "page",
-            "comic_pages": "page",
-            "comic page": "page",
-            "characters": "character",
-            "character": "character",
-            "chars": "character",
-            "sentences": "sentence",
-            "sentence": "sentence",
-            "two column pages": "2 column page",
-            "two_column_pages": "2 column page",
-            "minutes high density": "minute (high density)",
-            "minutes_high_density": "minute (high density)",
+            "page": "pages", "pages": "pages",
+            "comic page": "pages", "comic pages": "pages",
+            "character": "characters", "characters": "characters", "chars": "characters",
+            "sentence": "sentences", "sentences": "sentences",
         }
-        lookup = aliases.get(unit_name, unit_name)
-        candidates = [unit_name, lookup, f"{lookup}s", lookup.rstrip("s")]
-        for key in candidates:
-            if key in overrides and overrides[key]:
-                return overrides[key]
-        units = self._fetch_units(client)
-        for key in candidates:
-            found = units.get(f"{activity_id}:{key}") or units.get(key)
-            if found:
-                return found
-        # listening fallback: any unit containing "minute" for this activity
-        if activity_id == 2:
-            for k, uid in units.items():
-                if k.startswith(f"{activity_id}:") and "minute" in k:
-                    return uid
-        return None
+        key = aliases.get(unit)
+        if key is not None and activity_id in (1, 3):
+            return key
+        raise ValueError(
+            f"Tadoku does not support amount unit {entry.unit!r} for activity {activity_id}"
+        )
 
-    def _api_body(self, entry: LogEntry, client: httpx.Client) -> dict[str, Any]:
+    def _api_body(self, entry: LogEntry) -> dict[str, Any]:
         activity_id = self._activity_id(entry)
         lang = normalize_tadoku_language(
             entry.language or self.cfg.language_code or "jpn",
@@ -357,35 +304,15 @@ class TadokuClient:
             body["registration_ids"] = [reg.strip()]
 
         duration = self._duration_seconds(entry)
-        unit_id = self._resolve_unit_id(client, entry, activity_id)
-
-        # Match the website form: amount + unit_id whenever possible so the UI
-        # shows minutes/pages (duration-only logs show amount=0 on tadoku.app).
-        if unit_id and entry.amount is not None and float(entry.amount) > 0:
-            amt = float(entry.amount)
-            # Character/page counts are whole numbers; some tadoku paths 500 on floats.
-            unit_l = (entry.unit or "").lower()
-            if any(
-                x in unit_l
-                for x in ("char", "page", "sentence", "comic")
-            ):
-                body["amount"] = int(round(amt))
-            else:
-                body["amount"] = amt
-            body["unit_id"] = unit_id
+        if entry.amount is None or float(entry.amount) <= 0:
+            raise ValueError("log has no positive amount/duration to submit")
         if duration is not None:
+            # Timed logs have no amount unit in the current API, including
+            # reading/writing sessions measured in time.
             body["duration_seconds"] = duration
-
-        # Fallback if unit lookup failed
-        if "amount" not in body and "duration_seconds" not in body:
-            if entry.amount is not None and float(entry.amount) > 0:
-                body["amount"] = float(entry.amount)
-            else:
-                raise ValueError("log has no amount/duration to submit")
-
-        if "amount" in body and "unit_id" not in body and duration is not None:
-            # Keep duration so score still computes for listening
-            body.setdefault("duration_seconds", duration)
+        else:
+            body["unit_key"] = self._resolve_unit_key(entry, activity_id)
+            body["amount"] = float(entry.amount)
 
         return body
 
@@ -464,7 +391,7 @@ class TadokuClient:
             with httpx.Client(
                 timeout=30.0, headers=headers, follow_redirects=True
             ) as client:
-                req_body = self._api_body(entry, client)
+                req_body = self._api_body(entry)
                 logger.info(
                     "Tadoku submit local_id=%s contest=%s body_keys=%s",
                     entry.id,
@@ -503,7 +430,7 @@ class TadokuClient:
                     f"(empty response) language_code={body.get('language_code')!r} "
                     f"description={str(body.get('description') or '')[:100]!r} "
                     f"tags={body.get('tags')!r} "
-                    f"amount={body.get('amount')!r} unit_id={body.get('unit_id')!r}"
+                    f"amount={body.get('amount')!r} unit_key={body.get('unit_key')!r}"
                 )
             else:
                 body_txt = body_txt[:500]

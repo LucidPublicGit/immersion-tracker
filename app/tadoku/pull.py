@@ -476,7 +476,14 @@ def import_remote_log(db: Session, remote: dict[str, Any]) -> Optional[LogEntry]
     tags = list(remote.get("tags") or [])
     content_type = _content_type_from_tags(tags, description)
     activity = _activity_from_remote(remote)
-    unit = _unit_from_remote(remote.get("unit_name"), activity)
+    unit = _unit_from_remote(remote.get("unit_key") or remote.get("unit_name"), activity)
+    amount = float(remote.get("amount") or 0.0)
+    if amount <= 0:
+        duration = float(remote.get("duration_seconds") or 0.0)
+        if duration <= 0:
+            return None
+        unit = "minutes"
+        amount = duration / 60.0
     # Reading (pages) vs listening (minutes) must not share an anime key
     content_type = refine_content_type_from_activity(
         content_type,
@@ -484,10 +491,6 @@ def import_remote_log(db: Session, remote: dict[str, Any]) -> Optional[LogEntry]
         activity=activity,
         description=description,
     )
-    amount = float(remote.get("amount") or 0.0)
-    if amount <= 0:
-        # duration-only edge case — skip zero
-        return None
 
     lang = (remote.get("language") or {}).get("code") or "jpn"
     if lang == "jpn":
